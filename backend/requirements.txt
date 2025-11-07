@@ -1,0 +1,38 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+sqlalchemy==2.0.23
+psycopg2-binary==2.9.9
+alembic==1.12.1
+redis==5.0.1
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.6
+python-dotenv==1.0.0
+pydantic[email]==2.5.0
+pydantic-settings==2.1.0
+email-validator==2.1.0
+PyPDF2==3.0.1
+python-docx==1.1.0
+aiofiles==23.2.1
+jinja2==3.1.2
+emails==0.6
+celery==5.3.4
+pytest==7.4.3
+pytest-asyncio==0.21.1
+httpx
+google-api-python-client==2.108.0
+google-auth==2.23.4
+google-auth-oauthlib==1.1.0
+google-auth-httplib2==0.2.0
+
+# AI Interview Module Dependencies
+faster-whisper>=1.0.0
+pgvector>=0.2.0
+minio>=7.2.0
+boto3>=1.28.0  # For S3 compatibility (includes botocore)
+opencv-python>=4.8.0
+numpy>=1.24.0
+structlog>=23.2.0
+prometheus-client>=0.19.0
+pyannote.audio>=3.0.0  # Optional: for diarization
+onnxruntime>=1.16.0  # Optional: for YOLO phone detection

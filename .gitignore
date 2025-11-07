@@ -1,0 +1,14 @@
+# Node modules
+node_modules/
+**/node_modules/
+
+# Sensitive files - Credentials and Tokens
+.env
+.env.*
+*.env
+credentials.json
+**/credentials.json
+token.json
+**/token.json
+credentials*.json
+token*.json

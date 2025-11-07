@@ -1,0 +1,21 @@
+Defaulting to user installation because normal site-packages is not writeable
+Collecting minio
+  Downloading minio-7.2.18-py3-none-any.whl.metadata (6.5 kB)
+Collecting argon2-cffi (from minio)
+  Downloading argon2_cffi-25.1.0-py3-none-any.whl.metadata (4.1 kB)
+Requirement already satisfied: certifi in /usr/local/lib/python3.11/site-packages (from minio) (2025.10.5)
+Collecting pycryptodome (from minio)
+  Downloading pycryptodome-3.23.0-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl.metadata (3.4 kB)
+Requirement already satisfied: typing-extensions in /usr/local/lib/python3.11/site-packages (from minio) (4.15.0)
+Requirement already satisfied: urllib3 in /usr/local/lib/python3.11/site-packages (from minio) (2.5.0)
+Collecting argon2-cffi-bindings (from argon2-cffi->minio)
+  Downloading argon2_cffi_bindings-25.1.0-cp39-abi3-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl.metadata (7.4 kB)
+Requirement already satisfied: cffi>=1.0.1 in /usr/local/lib/python3.11/site-packages (from argon2-cffi-bindings->argon2-cffi->minio) (2.0.0)
+Requirement already satisfied: pycparser in /usr/local/lib/python3.11/site-packages (from cffi>=1.0.1->argon2-cffi-bindings->argon2-cffi->minio) (2.23)
+Downloading minio-7.2.18-py3-none-any.whl (93 kB)
+Downloading argon2_cffi-25.1.0-py3-none-any.whl (14 kB)
+Downloading argon2_cffi_bindings-25.1.0-cp39-abi3-manylinux_2_26_x86_64.manylinux_2_28_x86_64.whl (87 kB)
+Downloading pycryptodome-3.23.0-cp37-abi3-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (2.3 MB)
+   ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 2.3/2.3 MB 9.2 MB/s  0:00:00
+Installing collected packages: pycryptodome, argon2-cffi-bindings, argon2-cffi, minio
+
