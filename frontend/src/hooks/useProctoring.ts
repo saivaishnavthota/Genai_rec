@@ -84,49 +84,40 @@ export function useProctoring(): UseProctoringReturn {
     try {
       const timestamp = (Date.now() - sessionStartTime) / 1000;
       
-      // Check tab visibility
+      // Check tab visibility (send continuously to track duration)
       const tabVisible = checkTabVisibility();
       
-      if (!tabVisible) {
-        const event: ClientEvent = {
-          event_type: 'tab_switch',
-          timestamp,
-          confidence: 0.9, // High confidence when tab is hidden
-          tab_visible: false,
-          metadata: {
-            tab_visible: false,
-            visibility_change_time: trackingRef.current.lastTabVisibilityChange,
-          },
-        };
-        trackingRef.current.eventBuffer.push(event);
-      } else {
-        // Send tab visible event when tab becomes visible again
-        const event: ClientEvent = {
-          event_type: 'tab_switch',
-          timestamp,
-          confidence: 0.1, // Low confidence when tab is visible
-          tab_visible: true,
-          metadata: {
-            tab_visible: true,
-          },
-        };
-        trackingRef.current.eventBuffer.push(event);
-      }
+      // Always send tab_switch event to track duration correctly
+      const tabEvent: ClientEvent = {
+        event_type: 'tab_switch',
+        timestamp,
+        confidence: tabVisible ? 0.0 : 0.9, // High confidence when tab is hidden
+        tab_visible: tabVisible,
+        metadata: {
+          tab_visible: tabVisible,
+          visibility_change_time: trackingRef.current.lastTabVisibilityChange,
+        },
+      };
+      trackingRef.current.eventBuffer.push(tabEvent);
 
       // Phone detection (simplified)
+      // TODO: Implement proper phone detection using computer vision (YOLO or similar)
+      // For now, this is a placeholder that always returns false
+      // In production, you would analyze video frames to detect phones
       const phoneDetected = await detectPhone();
-      if (phoneDetected) {
-        const event: ClientEvent = {
-          event_type: 'phone',
-          timestamp,
-          confidence: 0.7, // Medium confidence for phone detection
-          phone_detected: true,
-          metadata: {
-            phone_detected: true,
-          },
-        };
-        trackingRef.current.eventBuffer.push(event);
-      }
+      
+      // Always send phone event to track duration correctly
+      // When phone is detected, send high confidence; otherwise send 0
+      const phoneEvent: ClientEvent = {
+        event_type: 'phone',
+        timestamp,
+        confidence: phoneDetected ? 0.7 : 0.0, // Medium confidence when phone detected
+        phone_detected: phoneDetected,
+        metadata: {
+          phone_detected: phoneDetected,
+        },
+      };
+      trackingRef.current.eventBuffer.push(phoneEvent);
 
       // Send events in batches
       if (trackingRef.current.eventBuffer.length >= BATCH_SIZE) {

@@ -23,6 +23,9 @@ const AIInterviewRoomPage: React.FC = () => {
   const navigate = useNavigate();
   const videoRef = useRef<HTMLVideoElement>(null);
   const videoPreviewRef = useRef<VideoPreviewHandle>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordedChunksRef = useRef<Blob[]>([]);
+  const recordingMimeTypeRef = useRef<string>('video/webm');
 
   const [stage, setStage] = useState<InterviewStage>('precheck');
   const [sessionData, setSessionData] = useState<StartInterviewResponse | null>(null);
@@ -66,6 +69,70 @@ const AIInterviewRoomPage: React.FC = () => {
       });
     }
   }, [mediaDevices.stream]);
+
+  // Start video recording when interview goes live
+  useEffect(() => {
+    if (stage === 'live' && mediaDevices.stream && !mediaRecorderRef.current) {
+      try {
+        // Check if MediaRecorder is supported
+        if (!window.MediaRecorder) {
+          console.warn('MediaRecorder not supported in this browser');
+          return;
+        }
+
+        // Find supported MIME type
+        const options: MediaRecorderOptions = {};
+        const mimeTypes = [
+          'video/webm;codecs=vp9,opus',
+          'video/webm;codecs=vp8,opus',
+          'video/webm',
+          'video/mp4'
+        ];
+
+        for (const mimeType of mimeTypes) {
+          if (MediaRecorder.isTypeSupported(mimeType)) {
+            options.mimeType = mimeType;
+            break;
+          }
+        }
+
+        const recorder = new MediaRecorder(mediaDevices.stream, options);
+        
+        recorder.ondataavailable = (event) => {
+          if (event.data && event.data.size > 0) {
+            recordedChunksRef.current.push(event.data);
+            console.log(`Recorded chunk: ${event.data.size} bytes`);
+          }
+        };
+
+        recorder.onerror = (event) => {
+          console.error('MediaRecorder error:', event);
+        };
+
+        recorder.onstop = () => {
+          console.log('Recording stopped. Total chunks:', recordedChunksRef.current.length);
+        };
+
+        // Start recording, collecting data every second
+        recorder.start(1000);
+        mediaRecorderRef.current = recorder;
+        recordingMimeTypeRef.current = options.mimeType || 'video/webm';
+        recordedChunksRef.current = []; // Reset chunks
+        console.log('Video recording started with MIME type:', recordingMimeTypeRef.current);
+      } catch (error) {
+        console.error('Failed to start video recording:', error);
+      }
+    }
+
+    // Stop recording when interview is not live
+    if (stage !== 'live' && mediaRecorderRef.current) {
+      if (mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+        console.log('Video recording stopped');
+      }
+      mediaRecorderRef.current = null;
+    }
+  }, [stage, mediaDevices.stream]);
 
   // Handle precheck complete
   const handlePrecheckReady = () => {
@@ -238,6 +305,52 @@ const AIInterviewRoomPage: React.FC = () => {
       proctoring.stopTracking();
       webrtc.disconnect();
       sse.disconnect(); // Stop polling for flags
+
+      // Stop video recording and upload
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        console.log('Stopping video recording...');
+        
+        // Wait for recording to stop and collect final data
+        await new Promise<void>((resolve) => {
+          if (!mediaRecorderRef.current) {
+            resolve();
+            return;
+          }
+
+          const onStop = () => {
+            console.log('Recording stopped, preparing upload...');
+            mediaRecorderRef.current?.removeEventListener('stop', onStop);
+            resolve();
+          };
+
+          mediaRecorderRef.current.addEventListener('stop', onStop);
+          mediaRecorderRef.current.stop();
+        });
+
+        // Create blob from recorded chunks
+        if (recordedChunksRef.current.length > 0) {
+          const blob = new Blob(recordedChunksRef.current, { 
+            type: recordingMimeTypeRef.current
+          });
+          console.log(`Video blob created: ${blob.size} bytes (${(blob.size / 1024 / 1024).toFixed(2)} MB)`);
+
+          // Upload video
+          try {
+            await aiInterviewAPI.uploadVideo(parseInt(sessionId), blob);
+            console.log('Video uploaded successfully');
+          } catch (uploadError) {
+            console.error('Failed to upload video:', uploadError);
+            // Continue even if upload fails
+          }
+          
+          // Clear chunks
+          recordedChunksRef.current = [];
+        } else {
+          console.warn('No video chunks recorded');
+        }
+      }
+
+      // Stop media stream after recording is done
       mediaDevices.stopStream();
 
       // End session
@@ -249,6 +362,7 @@ const AIInterviewRoomPage: React.FC = () => {
       }, 3000);
     } catch (error) {
       console.error('Failed to end interview:', error);
+      setStage('completed'); // Still mark as completed even on error
     }
   };
 

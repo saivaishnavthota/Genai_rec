@@ -86,7 +86,9 @@ class Settings(BaseSettings):
     s3_region: str = "us-east-1"
     
     # Ollama Configuration (for RAG scoring)
-    ollama_api_url: str = "http://ollama:11434"
+    # Default: host.docker.internal for Docker (Windows/Mac), localhost for local dev
+    # Override via OLLAMA_API_URL env var (set in docker-compose.yml)
+    ollama_api_url: str = "http://host.docker.internal:11434"
     ollama_model: str = "qwen2.5:3b-instruct"
     
     # Feature Flags

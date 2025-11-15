@@ -237,7 +237,7 @@ Respond with ONLY valid JSON, no other text.
             print(f"🏢 Project: {project_name}")
             print(f"📤 Generating comprehensive job description...")
 
-            content = await self._chat_ollama(messages, temperature=0.4, max_tokens=320)
+            content = await self._chat_ollama(messages, temperature=0.4, max_tokens=2000)
 
             print(f"\n📥 === OLLAMA JOB DESCRIPTION RAW RESPONSE ===")
             print(f"📏 Response Length: {len(content)} characters")
@@ -246,31 +246,80 @@ Respond with ONLY valid JSON, no other text.
             print(content)
             print("=" * 80)
 
+            # Try to extract JSON with improved logic
             json_start = content.find('{')
-            json_end = content.rfind('}') + 1
             
             print(f"\n🔍 === JSON PARSING ATTEMPT (JOB DESCRIPTION) ===")
             print(f"JSON Start Position: {json_start}")
+            
+            if json_start == -1:
+                print("❌ No opening brace found, using fallback")
+                return self._fallback_job_description(role_title, role_description)
+            
+            # Find the matching closing brace by counting braces
+            brace_count = 0
+            json_end = -1
+            for i in range(json_start, len(content)):
+                if content[i] == '{':
+                    brace_count += 1
+                elif content[i] == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        json_end = i + 1
+                        break
+            
             print(f"JSON End Position: {json_end}")
             
-            if json_start != -1 and json_end > json_start:
+            if json_end > json_start:
                 json_text = content[json_start:json_end]
                 print(f"📋 Extracted JSON Text:")
                 print("-" * 40)
                 print(json_text)
                 print("-" * 40)
                 
-                result = json.loads(json_text)
-                print(f"✅ JSON PARSING SUCCESS!")
-                print(f"📊 Parsed Result Keys: {list(result.keys())}")
-                
-                # Validate and normalize the result to match schema
-                normalized_result = self._normalize_job_description_response(result)
-                print(f"🔧 Normalized Result Keys: {list(normalized_result.keys())}")
-                return normalized_result
+                try:
+                    result = json.loads(json_text)
+                    print(f"✅ JSON PARSING SUCCESS!")
+                    print(f"📊 Parsed Result Keys: {list(result.keys())}")
+                    
+                    # Validate and normalize the result to match schema
+                    normalized_result = self._normalize_job_description_response(result)
+                    print(f"🔧 Normalized Result Keys: {list(normalized_result.keys())}")
+                    return normalized_result
+                except json.JSONDecodeError as e:
+                    print(f"❌ JSON decode error: {e}")
+                    print("🔄 Attempting to fix JSON...")
+                    # Try to fix common JSON issues
+                    json_text_fixed = self._fix_json_string(json_text)
+                    try:
+                        result = json.loads(json_text_fixed)
+                        print(f"✅ JSON PARSING SUCCESS after fix!")
+                        normalized_result = self._normalize_job_description_response(result)
+                        return normalized_result
+                    except:
+                        print("❌ Could not fix JSON, using fallback")
+                        return self._fallback_job_description(role_title, role_description)
             else:
-                print("❌ No valid JSON found, using fallback")
-                return self._fallback_job_description(role_title, role_description)
+                # If no closing brace found, try to extract what we have and add closing brace
+                print("⚠️ No closing brace found, attempting to fix...")
+                json_text = content[json_start:].strip()
+                # Remove any trailing non-JSON text
+                last_brace = json_text.rfind('}')
+                if last_brace != -1:
+                    json_text = json_text[:last_brace + 1]
+                else:
+                    # Try to add closing brace if JSON seems complete
+                    if json_text.count('{') > json_text.count('}'):
+                        json_text += '}'
+                
+                try:
+                    result = json.loads(json_text)
+                    print(f"✅ JSON PARSING SUCCESS after fix!")
+                    normalized_result = self._normalize_job_description_response(result)
+                    return normalized_result
+                except:
+                    print("❌ No valid JSON found, using fallback")
+                    return self._fallback_job_description(role_title, role_description)
 
         except Exception as e:
             logger.error(f"❌ Error generating job description: {e}")
@@ -318,6 +367,31 @@ Respond with ONLY valid JSON, no other text.
             normalized['additional_requirements'] = []
         
         return normalized
+
+    def _fix_json_string(self, json_text: str) -> str:
+        """Attempt to fix common JSON issues in LLM responses"""
+        # Remove any trailing text after the last }
+        last_brace = json_text.rfind('}')
+        if last_brace != -1:
+            json_text = json_text[:last_brace + 1]
+        
+        # Fix unescaped newlines in strings
+        import re
+        # This is a simple fix - in production you might want more sophisticated handling
+        # For now, we'll just ensure the JSON structure is valid
+        
+        # Try to balance braces if needed
+        open_count = json_text.count('{')
+        close_count = json_text.count('}')
+        if open_count > close_count:
+            json_text += '}' * (open_count - close_count)
+        elif close_count > open_count:
+            # Remove extra closing braces from the end
+            json_text = json_text.rstrip('}')
+            while json_text.count('{') < json_text.count('}'):
+                json_text = json_text.rstrip('}')
+        
+        return json_text.strip()
 
     def _normalize_job_description_response(self, result: Dict[str, Any]) -> Dict[str, str]:
         """Normalize LLM job description response to match expected schema"""
@@ -502,3 +576,188 @@ We are seeking a qualified {role_title} to join our dynamic team. {role_descript
             """,
             "short_description": f"We are seeking a qualified {role_title} to join our team. This role involves {role_description.lower()[:100]}... The ideal candidate will bring relevant experience and contribute to our team's success."
         }
+    
+    async def generate_interview_questions(
+        self,
+        resume_text: str,
+        job_title: str,
+        job_description: str,
+        key_skills: List[str],
+        experience_level: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Generate interview questions from resume and job details using LLM
+        
+        Args:
+            resume_text: Full text extracted from candidate's resume
+            job_title: Job title
+            job_description: Job description
+            key_skills: List of key skills required for the job
+            experience_level: Experience level (e.g., "entry", "mid", "senior")
+            
+        Returns:
+            List of question dictionaries with id, text, type, and time_limit
+        """
+        try:
+            logger.info(f"🤖 Generating interview questions for role: {job_title}")
+
+            if self.fallback_mode:
+                logger.warning("⚠️ Using fallback mode - LLM not available")
+                return self._fallback_questions(job_title, key_skills, experience_level)
+
+            # Build resume summary from parsed data if available
+            skills_text = ", ".join(key_skills) if key_skills else "relevant technical skills"
+            
+            # Truncate resume text to avoid token limits (keep first 2000 chars)
+            resume_summary = resume_text[:2000] if len(resume_text) > 2000 else resume_text
+            
+            prompt = f"""Generate 5 personalized interview questions for a candidate based on their resume and the job requirements.
+
+Job Title: {job_title}
+Job Description: {job_description[:500]}
+Required Skills: {skills_text}
+Experience Level: {experience_level or "Not specified"}
+
+Candidate Resume Summary:
+{resume_summary}
+
+Generate 5 interview questions that:
+1. Are personalized based on the candidate's resume content
+2. Test relevant skills and experience mentioned in their resume
+3. Are appropriate for the job role and experience level
+4. Include a mix of technical, behavioral, and experience-based questions
+5. Are clear, concise, and interview-appropriate
+
+Return ONLY a JSON array with this exact format:
+[
+  {{
+    "id": 1,
+    "text": "Question text here",
+    "type": "behavioral|technical|experience|closing",
+    "time_limit": 120
+  }},
+  ...
+]
+
+Question types:
+- "behavioral": Questions about past experiences, problem-solving, teamwork
+- "technical": Questions about specific skills, technologies, or technical knowledge
+- "experience": Questions about work history and relevant experience
+- "closing": Final question asking if candidate has questions
+
+Time limits should be in seconds (typically 120-180 seconds per question).
+
+Respond with ONLY the JSON array, no other text."""
+
+            messages = [
+                {"role": "system", "content": "You are an expert HR interviewer. Generate personalized interview questions based on candidate resumes. Always respond with valid JSON only."},
+                {"role": "user", "content": prompt}
+            ]
+
+            logger.info(f"📤 Generating questions with Ollama...")
+            content = await self._chat_ollama(messages, temperature=0.5, max_tokens=1500)
+
+            logger.info(f"📥 Received response from LLM (length: {len(content)} chars)")
+
+            # Extract JSON array
+            json_start = content.find('[')
+            json_end = content.rfind(']') + 1
+            
+            if json_start != -1 and json_end > json_start:
+                json_text = content[json_start:json_end]
+                try:
+                    questions = json.loads(json_text)
+                    # Validate questions structure
+                    if isinstance(questions, list) and len(questions) > 0:
+                        # Ensure all questions have required fields
+                        validated_questions = []
+                        for i, q in enumerate(questions):
+                            if isinstance(q, dict) and "text" in q:
+                                validated_questions.append({
+                                    "id": q.get("id", i + 1),
+                                    "text": str(q.get("text", "")),
+                                    "type": q.get("type", "behavioral"),
+                                    "time_limit": int(q.get("time_limit", 120))
+                                })
+                        
+                        if len(validated_questions) >= 3:  # At least 3 questions
+                            logger.info(f"✅ Generated {len(validated_questions)} questions successfully")
+                            return validated_questions
+                        else:
+                            logger.warning(f"⚠️ Only {len(validated_questions)} valid questions, using fallback")
+                            return self._fallback_questions(job_title, key_skills, experience_level)
+                    else:
+                        logger.warning("⚠️ Invalid questions format, using fallback")
+                        return self._fallback_questions(job_title, key_skills, experience_level)
+                except json.JSONDecodeError as e:
+                    logger.error(f"❌ JSON decode error: {e}")
+                    logger.debug(f"Failed JSON text: {json_text[:500]}")
+                    return self._fallback_questions(job_title, key_skills, experience_level)
+            else:
+                logger.warning("⚠️ No JSON array found in response, using fallback")
+                return self._fallback_questions(job_title, key_skills, experience_level)
+
+        except Exception as e:
+            logger.error(f"❌ Error generating interview questions: {e}", exc_info=True)
+            return self._fallback_questions(job_title, key_skills, experience_level)
+    
+    def _fallback_questions(
+        self,
+        job_title: str,
+        key_skills: List[str],
+        experience_level: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """Fallback questions if LLM generation fails"""
+        questions = []
+        
+        # Question 1: Introduction
+        questions.append({
+            "id": 1,
+            "text": "Tell us about yourself and why you're interested in this position.",
+            "type": "behavioral",
+            "time_limit": 120
+        })
+        
+        # Question 2: Role-specific
+        if key_skills:
+            skills_text = ", ".join(key_skills[:3])
+            questions.append({
+                "id": 2,
+                "text": f"This role requires skills in {skills_text}. Can you share your experience with these technologies?",
+                "type": "technical",
+                "time_limit": 180
+            })
+        
+        # Question 3: Experience
+        if experience_level:
+            questions.append({
+                "id": 3,
+                "text": f"With this being a {experience_level} level position, what relevant experience do you bring to this role?",
+                "type": "experience",
+                "time_limit": 150
+            })
+        else:
+            questions.append({
+                "id": 3,
+                "text": "What relevant experience do you bring to this role?",
+                "type": "experience",
+                "time_limit": 150
+            })
+        
+        # Question 4: Problem-solving
+        questions.append({
+            "id": 4,
+            "text": "Describe a challenging project or problem you've worked on. How did you approach it and what was the outcome?",
+            "type": "behavioral",
+            "time_limit": 180
+        })
+        
+        # Question 5: Closing
+        questions.append({
+            "id": 5,
+            "text": "Do you have any questions about the role or the company?",
+            "type": "closing",
+            "time_limit": 120
+        })
+        
+        return questions

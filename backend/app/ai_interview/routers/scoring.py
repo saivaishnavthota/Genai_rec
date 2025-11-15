@@ -4,7 +4,8 @@ from fastapi.responses import StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from datetime import datetime
-from typing import Optional
+from typing import Optional, Any
+from decimal import Decimal
 import logging
 import tempfile
 import os
@@ -19,6 +20,18 @@ from ..services.asr_service import ASRService
 from ..services.rag_service import RAGService
 
 logger = logging.getLogger(__name__)
+
+
+def convert_decimals_to_floats(obj: Any) -> Any:
+    """Recursively convert Decimal values to float for JSON serialization"""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    elif isinstance(obj, dict):
+        return {key: convert_decimals_to_floats(value) for key, value in obj.items()}
+    elif isinstance(obj, list):
+        return [convert_decimals_to_floats(item) for item in obj]
+    else:
+        return obj
 
 router = APIRouter()
 
@@ -85,21 +98,24 @@ async def score_session(
         if session.report_json and "scores" in session.report_json:
             return ScoreOut(**session.report_json["scores"])
         
-        # Get transcript
-        if not session.transcript_url:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Transcript not available for scoring"
-            )
-        
-        # Load transcript
+        # Get transcript - try multiple sources
         transcript_text = ""
+        transcript_path = None
+        
+        # Try to get transcript from session.transcript_url first
+        if session.transcript_url:
+            transcript_path = session.transcript_url
+        else:
+            # Try default path
+            transcript_path = _storage_service.get_transcript_path(session_id)
+        
+        logger.info(f"Attempting to load transcript for session {session_id} from: {transcript_path}")
+        
         try:
             import tempfile
             import json
             import os
             
-            transcript_path = _storage_service.get_transcript_path(session_id)
             tmp_path = None
             
             try:
@@ -108,39 +124,56 @@ async def score_session(
                     tmp_path = tmp.name
                 
                 # Download transcript from storage
-                try:
-                    _storage_service.download_file(transcript_path, tmp_path)
-                except Exception as e:
-                    logger.warning(f"Failed to download transcript from storage: {e}")
-                    # If storage not available, try to use transcript_url as direct path
-                    if session.transcript_url and os.path.exists(session.transcript_url):
-                        tmp_path = session.transcript_url
-                    else:
-                        raise ValueError("Transcript file not found")
+                if _storage_service.is_available() and transcript_path:
+                    try:
+                        logger.info(f"Downloading transcript from storage: {transcript_path}")
+                        _storage_service.download_file(transcript_path, tmp_path)
+                        logger.info(f"Successfully downloaded transcript")
+                    except Exception as e:
+                        logger.warning(f"Failed to download transcript from storage: {e}")
+                        # Try alternative path
+                        alt_path = f"sessions/{session_id}/artifacts/transcript.json"
+                        try:
+                            _storage_service.download_file(alt_path, tmp_path)
+                            logger.info(f"Downloaded transcript from alternative path: {alt_path}")
+                        except Exception as e2:
+                            logger.warning(f"Alternative path also failed: {e2}")
+                            # If storage not available, try to use transcript_url as direct path
+                            if session.transcript_url and os.path.exists(session.transcript_url):
+                                tmp_path = session.transcript_url
+                                logger.info(f"Using local file path: {tmp_path}")
+                            else:
+                                raise ValueError(f"Transcript file not found at {transcript_path} or {alt_path}")
                 
                 # Load transcript JSON and extract text
                 if tmp_path and os.path.exists(tmp_path):
-                    with open(tmp_path, 'r') as f:
+                    file_size = os.path.getsize(tmp_path)
+                    logger.info(f"Loading transcript file: {tmp_path} ({file_size} bytes)")
+                    with open(tmp_path, 'r', encoding='utf-8') as f:
                         transcript_data = json.load(f)
                     
                     # Extract text from transcript
                     if isinstance(transcript_data, dict) and 'segments' in transcript_data:
                         segments = transcript_data['segments']
                         transcript_text = ' '.join([seg.get('text', '') for seg in segments if isinstance(seg, dict)])
+                    elif isinstance(transcript_data, dict) and 'text' in transcript_data:
+                        transcript_text = transcript_data['text']
                     elif isinstance(transcript_data, list):
                         transcript_text = ' '.join([seg.get('text', '') for seg in transcript_data if isinstance(seg, dict)])
                     elif isinstance(transcript_data, str):
                         transcript_text = transcript_data
                     else:
                         transcript_text = str(transcript_data)
+                    
+                    logger.info(f"Extracted transcript text: {len(transcript_text)} characters")
+                else:
+                    raise ValueError(f"Transcript file not found: {tmp_path}")
             except Exception as e:
-                logger.warning(f"Failed to load transcript file: {e}")
-                # If transcript is required, raise error
-                if not transcript_text:
-                    raise HTTPException(
-                        status_code=status.HTTP_400_BAD_REQUEST,
-                        detail=f"Failed to load transcript: {str(e)}"
-                    )
+                logger.error(f"Failed to load transcript file: {e}", exc_info=True)
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Failed to load transcript: {str(e)}. Path tried: {transcript_path}"
+                )
             finally:
                 # Cleanup temp file (only if it was created by us)
                 if tmp_path and tmp_path.startswith(tempfile.gettempdir()):
@@ -149,34 +182,77 @@ async def score_session(
                             os.remove(tmp_path)
                     except Exception as e:
                         logger.warning(f"Failed to cleanup temp file: {e}")
+        except HTTPException:
+            raise
         except Exception as e:
-            logger.error(f"Failed to load transcript for scoring: {e}")
+            logger.error(f"Failed to load transcript for scoring: {e}", exc_info=True)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Transcript not available: {str(e)}"
             )
         
+        if not transcript_text or len(transcript_text.strip()) == 0:
+            logger.warning(f"Transcript is empty for session {session_id}. transcript_url={session.transcript_url}")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Transcript is empty or not available. Please ensure the interview video has been uploaded and transcribed before scoring. If the video was just uploaded, wait a few moments for transcription to complete."
+            )
+        
         # Score using RAG
-        scores = await _rag_service.score_interview(
-            db,
-            transcript_text,
-            session_id,
-            session.job_id
-        )
+        try:
+            scores = await _rag_service.score_interview(
+                db,
+                transcript_text,
+                session_id,
+                session.job_id
+            )
+        except Exception as e:
+            logger.error(f"RAG scoring failed for session {session_id}: {e}", exc_info=True)
+            # Check if it's an Ollama connection error
+            error_msg = str(e)
+            if "Connection" in error_msg or "timeout" in error_msg.lower() or "refused" in error_msg.lower():
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=f"Scoring service unavailable. Please ensure Ollama is running and accessible at {_rag_service.ollama_url}. Error: {error_msg}"
+                )
+            elif "JSON" in error_msg or "parse" in error_msg.lower():
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to parse scoring response from LLM. The model may have returned invalid JSON. Error: {error_msg}"
+                )
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to score interview: {error_msg}"
+                )
         
         # Update session
-        session.total_score = scores.final_score
-        session.report_json = {
-            "scores": scores.model_dump(),
-            "scored_at": str(datetime.utcnow())
-        }
-        
-        # Calculate recommendation
-        recommendation = _interview_service.calculate_recommendation(db, session_id)
-        session.recommendation = recommendation
-        
-        db.commit()
-        db.refresh(session)
+        try:
+            session.total_score = scores.final_score
+            
+            # Convert scores to dict and ensure all Decimal values are converted to float for JSON serialization
+            scores_dict = scores.model_dump()
+            # Recursively convert all Decimal values to float
+            scores_dict = convert_decimals_to_floats(scores_dict)
+            
+            session.report_json = {
+                "scores": scores_dict,
+                "scored_at": str(datetime.utcnow())
+            }
+            
+            # Calculate recommendation
+            recommendation = _interview_service.calculate_recommendation(db, session_id)
+            session.recommendation = recommendation
+            
+            db.commit()
+            db.refresh(session)
+        except Exception as e:
+            logger.error(f"Failed to save scores to database for session {session_id}: {e}", exc_info=True)
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to save scores: {str(e)}"
+            )
         
         return scores
     except ValueError as e:
@@ -185,10 +261,11 @@ async def score_session(
             detail=str(e)
         )
     except Exception as e:
-        logger.error(f"Failed to score session: {e}")
+        logger.error(f"Failed to score session {session_id}: {e}", exc_info=True)
+        db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=str(e)
+            detail=f"Failed to score session: {str(e)}"
         )
 
 
@@ -241,8 +318,12 @@ async def get_video(
                 detail=f"Session {session_id} not found"
             )
         
-        # Get video path
-        video_path = session.video_url or f"sessions/{session_id}/raw.mp4"
+        # Get video path - use session.video_url if set, otherwise try default path
+        video_path = session.video_url
+        if not video_path:
+            video_path = f"sessions/{session_id}/raw.mp4"
+        
+        logger.info(f"Serving video for session {session_id}, path: {video_path}")
         
         # Download video to temp file if needed
         temp_video = None
@@ -252,17 +333,30 @@ async def get_video(
                 temp_video = tmp.name
             
             # Download from storage
-            try:
-                _storage_service.download_file(video_path, temp_video)
-            except Exception as e:
-                logger.warning(f"Failed to download video from storage: {e}")
-                # Try as local file path
+            video_found = False
+            if _storage_service.is_available():
+                try:
+                    logger.info(f"Attempting to download video from storage: {video_path}")
+                    _storage_service.download_file(video_path, temp_video)
+                    video_found = os.path.exists(temp_video) and os.path.getsize(temp_video) > 0
+                    if video_found:
+                        logger.info(f"Successfully downloaded video from storage: {os.path.getsize(temp_video)} bytes")
+                    else:
+                        logger.warning(f"Downloaded file is empty or doesn't exist")
+                except Exception as e:
+                    logger.warning(f"Failed to download video from storage: {e}")
+            
+            # If storage download failed, try as local file path
+            if not video_found:
                 if os.path.exists(video_path):
+                    logger.info(f"Using local file path: {video_path}")
                     temp_video = video_path
+                    video_found = True
                 else:
+                    logger.error(f"Video file not found at path: {video_path}")
                     raise HTTPException(
                         status_code=status.HTTP_404_NOT_FOUND,
-                        detail=f"Video file not found for session {session_id}"
+                        detail=f"Video file not found for session {session_id}. Path: {video_path}"
                     )
             
             # Stream video file

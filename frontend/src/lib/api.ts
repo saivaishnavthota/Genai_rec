@@ -148,6 +148,14 @@ export const aiInterviewAPI = {
   postReviewDecision: async (sessionId: number, decision: ReviewDecision): Promise<void> => {
     await apiClient.post(`/api/ai-interview/review/${sessionId}/decision`, decision);
   },
+
+  uploadVideo: async (sessionId: number, videoFile: Blob): Promise<void> => {
+    const formData = new FormData();
+    formData.append('video_file', videoFile, `session-${sessionId}.webm`);
+    await apiClient.post(`/api/ai-interview/${sessionId}/upload-video`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }
+    });
+  },
 };
 
 export interface Question {

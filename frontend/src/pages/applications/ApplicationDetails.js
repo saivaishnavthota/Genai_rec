@@ -605,54 +605,65 @@ Slots cover: ${fromDate} to ${toDate}.` : '';
         {/* Main Content */}
         <div className="xl:col-span-3 lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
           {/* AI Analysis */}
-          {(application.ai_score || application.match_score || application.ats_score) && (
-            <div className="card bg-gradient-to-br from-sky-50 to-indigo-100 md:col-span-2 h-[52vh] overflow-y-auto">
-               <h2 className="text-lg font-semibold mb-3">AI Analysis</h2>
-               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
-                 {application.ai_score && (
-                   <div className={`p-3 rounded-lg ${getScoreColor(application.ai_score)}`}>
-                     <div className="flex items-center justify-between mb-1">
-                       <span className="text-xs font-medium">Overall AI Score</span>
-                       <StarIcon className="h-4 w-4" />
-                     </div>
-                     <div className="text-xl font-bold">{application.ai_score}%</div>
-                   </div>
-                 )}
-                 {application.match_score && (
-                   <div className={`p-3 rounded-lg ${getScoreColor(application.match_score)}`}>
-                     <div className="flex items-center justify-between mb-1">
-                       <span className="text-xs font-medium">Match Score</span>
-                       <CheckCircleIcon className="h-4 w-4" />
-                     </div>
-                     <div className="text-xl font-bold">{application.match_score}%</div>
-                   </div>
-                 )}
-                 {application.ats_score && (
-                   <div className={`p-3 rounded-lg ${getScoreColor(application.ats_score)}`}>
-                     <div className="flex items-center justify-between mb-1">
-                       <span className="text-xs font-medium">ATS Score</span>
-                       <DocumentTextIcon className="h-4 w-4" />
-                     </div>
-                     <div className="text-xl font-bold">{application.ats_score}%</div>
-                   </div>
-                 )}
+          <div className="card bg-gradient-to-br from-sky-50 to-indigo-100 md:col-span-2 h-[52vh] overflow-y-auto">
+             <h2 className="text-lg font-semibold mb-3">AI Analysis</h2>
+             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mb-4">
+               <div className={`p-3 rounded-lg ${application.ai_score != null ? getScoreColor(application.ai_score) : 'bg-gray-100 text-gray-600'}`}>
+                 <div className="flex items-center justify-between mb-1">
+                   <span className="text-xs font-medium">Overall AI Score</span>
+                   <StarIcon className="h-4 w-4" />
+                 </div>
+                 <div className="text-xl font-bold">
+                   {application.ai_score != null ? `${application.ai_score}%` : 'N/A'}
+                 </div>
                </div>
-               
-               {application.ai_summary && (
-                 <div className="mb-4">
-                   <h3 className="font-medium mb-2">AI Summary</h3>
-                   <p className="text-gray-700 leading-relaxed">{application.ai_summary}</p>
+               <div className={`p-3 rounded-lg ${application.match_score != null ? getScoreColor(application.match_score) : 'bg-gray-100 text-gray-600'}`}>
+                 <div className="flex items-center justify-between mb-1">
+                   <span className="text-xs font-medium">Match Score</span>
+                   <CheckCircleIcon className="h-4 w-4" />
                  </div>
-               )}
-               
-               {application.score_explanation && (
-                 <div className="mt-4 pt-4 border-t border-gray-300">
-                   <h3 className="font-medium mb-2 text-indigo-700">Detailed Score Explanation</h3>
-                   <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{application.score_explanation}</p>
+                 <div className="text-xl font-bold">
+                   {application.match_score != null ? `${application.match_score}%` : 'N/A'}
                  </div>
-               )}
+               </div>
+               <div className={`p-3 rounded-lg ${application.ats_score != null ? getScoreColor(application.ats_score) : 'bg-gray-100 text-gray-600'}`}>
+                 <div className="flex items-center justify-between mb-1">
+                   <span className="text-xs font-medium">ATS Score</span>
+                   <DocumentTextIcon className="h-4 w-4" />
+                 </div>
+                 <div className="text-xl font-bold">
+                   {application.ats_score != null ? `${application.ats_score}%` : 'N/A'}
+                 </div>
+               </div>
              </div>
-          )}
+             
+             {application.ai_summary && (
+               <div className="mb-4">
+                 <h3 className="font-medium mb-2">AI Summary</h3>
+                 <p className="text-gray-700 leading-relaxed">{application.ai_summary}</p>
+               </div>
+             )}
+             
+             {application.score_explanation && (
+               <div className="mt-4 pt-4 border-t border-gray-300">
+                 <h3 className="font-medium mb-2 text-indigo-700">Detailed Score Explanation</h3>
+                 <p className="text-gray-700 leading-relaxed whitespace-pre-wrap">{application.score_explanation}</p>
+               </div>
+             )}
+             
+             {!application.ai_score && !application.match_score && !application.ats_score && (
+               <div className="text-center py-4 text-gray-500">
+                 <p>No scores available yet. The application may still be processing.</p>
+                 <button
+                   onClick={handleRescore}
+                   disabled={updating}
+                   className="mt-2 px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 text-sm font-medium disabled:opacity-50"
+                 >
+                   {updating ? 'Processing...' : 'Score Application'}
+                 </button>
+               </div>
+             )}
+           </div>
 
           {interviewDetails && (
             <div className="md:col-span-2">
@@ -758,6 +769,42 @@ Slots cover: ${fromDate} to ${toDate}.` : '';
                    </div>
                  </div>
                </div>
+
+               {application.ai_score != null && (
+                 <div className="flex items-start">
+                   <StarIcon className="h-4 w-4 text-gray-400 mr-2 mt-0.5 flex-shrink-0" />
+                   <div className="min-w-0 flex-1">
+                     <div className="text-xs text-gray-500 uppercase tracking-wide">AI Score</div>
+                     <div className={`font-medium text-sm ${getScoreColor(application.ai_score).split(' ')[0]}`}>
+                       {application.ai_score}%
+                     </div>
+                   </div>
+                 </div>
+               )}
+
+               {application.match_score != null && (
+                 <div className="flex items-start">
+                   <CheckCircleIcon className="h-4 w-4 text-gray-400 mr-2 mt-0.5 flex-shrink-0" />
+                   <div className="min-w-0 flex-1">
+                     <div className="text-xs text-gray-500 uppercase tracking-wide">Match Score</div>
+                     <div className={`font-medium text-sm ${getScoreColor(application.match_score).split(' ')[0]}`}>
+                       {application.match_score}%
+                     </div>
+                   </div>
+                 </div>
+               )}
+
+               {application.ats_score != null && (
+                 <div className="flex items-start">
+                   <DocumentTextIcon className="h-4 w-4 text-gray-400 mr-2 mt-0.5 flex-shrink-0" />
+                   <div className="min-w-0 flex-1">
+                     <div className="text-xs text-gray-500 uppercase tracking-wide">ATS Score</div>
+                     <div className={`font-medium text-sm ${getScoreColor(application.ats_score).split(' ')[0]}`}>
+                       {application.ats_score}%
+                     </div>
+                   </div>
+                 </div>
+               )}
              </div>
            </div>
 
@@ -896,15 +943,15 @@ Slots cover: ${fromDate} to ${toDate}.` : '';
                       )}
                     </div>
                     
-                    {session.total_score !== null && (
+                    {session.total_score !== null && session.total_score !== undefined && (
                       <div className="mt-2">
                         <span className="text-sm font-medium text-gray-700">Score: </span>
                         <span className={`text-lg font-bold ${
-                          session.total_score >= 8 ? 'text-green-600' :
-                          session.total_score >= 6 ? 'text-yellow-600' :
+                          Number(session.total_score) >= 8 ? 'text-green-600' :
+                          Number(session.total_score) >= 6 ? 'text-yellow-600' :
                           'text-red-600'
                         }`}>
-                          {session.total_score.toFixed(1)}/10
+                          {Number(session.total_score).toFixed(1)}/10
                         </span>
                       </div>
                     )}

@@ -14,20 +14,29 @@ class ASRService:
     
     def __init__(self):
         """Initialize Whisper model"""
+        import os
         self.model_size = settings.whisper_model_size
         self.device = settings.whisper_device
         self.compute_type = settings.whisper_compute_type
         self.enable_diarization = settings.enable_diarization
         
+        # Set cache directory to a writable location (Docker-friendly)
+        cache_dir = os.getenv('HF_HOME', '/tmp/hf_cache')
+        os.makedirs(cache_dir, exist_ok=True)
+        os.environ['HF_HOME'] = cache_dir
+        os.environ['TRANSFORMERS_CACHE'] = cache_dir
+        os.environ['HF_HUB_CACHE'] = cache_dir
+        
         try:
             self.model = WhisperModel(
                 self.model_size,
                 device=self.device,
-                compute_type=self.compute_type
+                compute_type=self.compute_type,
+                download_root=cache_dir  # Use writable cache directory
             )
-            logger.info(f"Initialized Whisper model: {self.model_size} on {self.device}")
+            logger.info(f"Initialized Whisper model: {self.model_size} on {self.device} (cache: {cache_dir})")
         except Exception as e:
-            logger.error(f"Failed to initialize Whisper model: {e}")
+            logger.error(f"Failed to initialize Whisper model: {e}", exc_info=True)
             self.model = None
     
     async def transcribe_streaming(

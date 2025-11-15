@@ -407,15 +407,22 @@ IMPORTANT:
             ai_feedback = self.generate_ai_feedback(job, application, all_scores)
             
             # Generate detailed LLM explanation for why candidate got these scores
-            score_explanation = await self.generate_llm_score_explanation(
-                job=job,
-                application=application,
-                match_score=match_score,
-                ats_score=ats_score,
-                final_score=final_score,
-                match_scores=match_scores,
-                ats_scores=ats_scores
-            )
+            # Wrap in try-catch so LLM failures don't break the entire scoring process
+            score_explanation = None
+            try:
+                score_explanation = await self.generate_llm_score_explanation(
+                    job=job,
+                    application=application,
+                    match_score=match_score,
+                    ats_score=ats_score,
+                    final_score=final_score,
+                    match_scores=match_scores,
+                    ats_scores=ats_scores
+                )
+            except Exception as llm_error:
+                logger.warning(f"Failed to generate LLM score explanation for application {application.id}: {llm_error}")
+                # Continue without explanation - scoring can still succeed
+                score_explanation = None
             
             # Create score record
             application_score = ApplicationScore(

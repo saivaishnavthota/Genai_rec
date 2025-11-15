@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from sqlalchemy.orm import Session
 from datetime import timedelta
+import logging
 from ..database import get_db
 from ..models.user import User
 from ..models.company import Company
@@ -21,7 +22,24 @@ async def get_current_user(
     payload = verify_token(token)
     email = payload.get("sub")
     
-    user = db.query(User).filter(User.email == email).first()
+    try:
+        user = db.query(User).filter(User.email == email).first()
+    except Exception as e:
+        # Handle failed transaction state - rollback and retry
+        db.rollback()
+        logger = logging.getLogger(__name__)
+        logger.error(f"Database error in get_current_user: {e}")
+        # Retry once after rollback
+        try:
+            user = db.query(User).filter(User.email == email).first()
+        except Exception as retry_error:
+            logger.error(f"Retry also failed in get_current_user: {retry_error}")
+            db.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Database error. Please try again."
+            )
+    
     if user is None:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

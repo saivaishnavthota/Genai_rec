@@ -135,60 +135,88 @@ class InterviewService:
             AISessionFlag.session_id == session_id
         ).order_by(AISessionFlag.t_start).all()
         
-        # Get transcript
+        # Get transcript - try multiple paths
         transcript = None
+        transcript_path = None
+        
+        # Try to get transcript from session.transcript_url first
         if session.transcript_url:
+            transcript_path = session.transcript_url
+        else:
+            # Try default path
+            transcript_path = self.storage.get_transcript_path(session_id)
+        
+        logger.debug(f"Attempting to load transcript for session {session_id} from: {transcript_path}")
+        
+        try:
+            import tempfile
+            import json
+            import os
+            
+            tmp_path = None
+            
             try:
-                import tempfile
-                import json
-                import os
+                # Create temp file
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp:
+                    tmp_path = tmp.name
                 
-                transcript_path = self.storage.get_transcript_path(session_id)
-                tmp_path = None
-                
-                try:
-                    # Create temp file
-                    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp:
-                        tmp_path = tmp.name
-                    
-                    # Download transcript from storage
+                # Download transcript from storage
+                if self.storage.is_available() and transcript_path:
                     try:
                         if not self.storage.client:
                             raise RuntimeError("Storage client not available")
+                        logger.debug(f"Downloading transcript from storage: {transcript_path}")
                         self.storage.download_file(transcript_path, tmp_path)
+                        logger.debug(f"Successfully downloaded transcript")
                     except (RuntimeError, Exception) as e:
                         logger.warning(f"Failed to download transcript from storage: {e}")
-                        # If storage not available, try to use transcript_url as direct path
-                        if session.transcript_url and os.path.exists(session.transcript_url):
-                            tmp_path = session.transcript_url
-                        else:
-                            logger.warning("Transcript not available from storage or local path")
-                            raise
-                    
-                    # Load transcript JSON
-                    if tmp_path and os.path.exists(tmp_path):
-                        with open(tmp_path, 'r') as f:
-                            transcript = json.load(f)
-                            # Ensure transcript has segments format
-                            if isinstance(transcript, dict) and 'segments' in transcript:
-                                transcript = transcript
-                            elif isinstance(transcript, list):
-                                transcript = {'segments': transcript}
-                            else:
-                                # Convert to segments format if needed
-                                transcript = {'segments': transcript if isinstance(transcript, list) else []}
-                except Exception as e:
-                    logger.warning(f"Failed to load transcript file: {e}")
-                finally:
-                    # Cleanup temp file (only if it was created by us)
-                    if tmp_path and tmp_path.startswith(tempfile.gettempdir()):
+                        # Try alternative path
+                        alt_path = f"sessions/{session_id}/artifacts/transcript.json"
                         try:
-                            if os.path.exists(tmp_path):
-                                os.remove(tmp_path)
-                        except Exception as e:
-                            logger.warning(f"Failed to cleanup temp file: {e}")
+                            self.storage.download_file(alt_path, tmp_path)
+                            logger.debug(f"Downloaded transcript from alternative path: {alt_path}")
+                        except Exception as e2:
+                            logger.warning(f"Alternative path also failed: {e2}")
+                            # If storage not available, try to use transcript_url as direct path
+                            if session.transcript_url and os.path.exists(session.transcript_url):
+                                tmp_path = session.transcript_url
+                                logger.debug(f"Using local file path: {tmp_path}")
+                            else:
+                                logger.warning(f"Transcript not available from storage or local path. Tried: {transcript_path}, {alt_path}")
+                                raise
+                
+                # Load transcript JSON
+                if tmp_path and os.path.exists(tmp_path):
+                    file_size = os.path.getsize(tmp_path)
+                    logger.debug(f"Loading transcript file: {tmp_path} ({file_size} bytes)")
+                    with open(tmp_path, 'r', encoding='utf-8') as f:
+                        transcript = json.load(f)
+                    # Ensure transcript has segments format
+                    if isinstance(transcript, dict) and 'segments' in transcript:
+                        transcript = transcript
+                    elif isinstance(transcript, dict) and 'text' in transcript:
+                        # Convert text to segments format
+                        transcript = {'segments': [{'text': transcript['text'], 'start': 0, 'end': 0}]}
+                    elif isinstance(transcript, list):
+                        transcript = {'segments': transcript}
+                    else:
+                        # Convert to segments format if needed
+                        transcript = {'segments': transcript if isinstance(transcript, list) else []}
+                    logger.debug(f"Loaded transcript with {len(transcript.get('segments', []))} segments")
+                else:
+                    logger.warning(f"Transcript file not found: {tmp_path}")
             except Exception as e:
-                logger.warning(f"Failed to load transcript: {e}")
+                logger.warning(f"Failed to load transcript file: {e}")
+            finally:
+                # Cleanup temp file (only if it was created by us)
+                if tmp_path and tmp_path.startswith(tempfile.gettempdir()):
+                    try:
+                        if os.path.exists(tmp_path):
+                            os.remove(tmp_path)
+                    except Exception as e:
+                        logger.warning(f"Failed to cleanup temp file: {e}")
+        except Exception as e:
+            logger.warning(f"Failed to load transcript: {e}")
         
         # Get scores from report_json
         scores = None
@@ -206,27 +234,36 @@ class InterviewService:
             flag_dict = flag_out.model_dump(by_alias=True)  # Use alias for output (metadata)
             flag_data.append(flag_dict)
         
-        # Get video URL - use API endpoint instead of presigned URL
+        # Get video URL - use API endpoint for authenticated access
         # This allows us to serve videos through our API with proper authentication
         video_url = None
-        if session.video_url or True:  # Always try to generate URL
-            try:
-                # Check if storage is available first
-                if not self.storage.client:
-                    raise RuntimeError("Storage client not available")
-                
-                # Try presigned URL first (for external access)
-                if session.video_url:
-                    video_url = self.storage.get_presigned_url(session.video_url, expires=timedelta(days=7))
-                else:
-                    video_path = f"sessions/{session_id}/raw.mp4"
-                    video_url = self.storage.get_presigned_url(video_path, expires=timedelta(days=7))
-            except (RuntimeError, Exception) as e:
-                logger.debug(f"Storage not available, using API endpoint for video: {e}")
-                # Fallback to API endpoint
-                from ...config import settings
-                api_base = getattr(settings, 'api_base_url', 'http://localhost:8000')
-                video_url = f"{api_base}/api/ai-interview/{session_id}/video"
+        if session.video_url:
+            # Always use API endpoint for video access (more reliable than presigned URLs)
+            from ...config import settings
+            api_base = getattr(settings, 'api_base_url', 'http://localhost:8000')
+            video_url = f"{api_base}/api/ai-interview/{session_id}/video"
+            logger.debug(f"Generated video URL for session {session_id}: {video_url}")
+        else:
+            # Check if video might exist in storage even if video_url is not set
+            video_path = f"sessions/{session_id}/raw.mp4"
+            if self.storage.is_available():
+                try:
+                    # Check if video exists in storage
+                    from minio.error import S3Error
+                    try:
+                        # Try to stat the object to see if it exists
+                        self.storage.client.stat_object(self.storage.bucket_name, video_path)
+                        # Video exists, generate API URL
+                        from ...config import settings
+                        api_base = getattr(settings, 'api_base_url', 'http://localhost:8000')
+                        video_url = f"{api_base}/api/ai-interview/{session_id}/video"
+                        logger.debug(f"Video found in storage, generated URL: {video_url}")
+                    except S3Error:
+                        logger.debug(f"Video not found in storage at {video_path}")
+                        video_url = None
+                except Exception as e:
+                    logger.debug(f"Error checking video in storage: {e}")
+                    video_url = None
         
         # Get clip URLs for flags
         for flag_dict in flag_data:

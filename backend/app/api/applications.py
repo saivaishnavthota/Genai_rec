@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from typing import List, Optional
 import uuid
 from ..database import get_db
@@ -145,7 +146,7 @@ async def get_applications(
     skip: int = Query(0, ge=0),
     limit: int = Query(100, ge=1, le=1000),
     job_id: Optional[int] = Query(None),
-    status: Optional[str] = Query(None),
+    application_status: Optional[str] = Query(None, alias="status"),
     sort: Optional[str] = Query("created_at"),
     order: Optional[str] = Query("desc"),
     current_user: User = Depends(get_current_user),
@@ -168,8 +169,8 @@ async def get_applications(
         # Apply filters - handle empty strings
         if job_id and job_id > 0:
             query = query.filter(Application.job_id == job_id)
-        if status and status.strip():
-            query = query.filter(Application.status == status)
+        if application_status and application_status.strip():
+            query = query.filter(Application.status == application_status)
         
         # Apply sorting (default to created_at)
         sort_field = sort or "created_at"
@@ -219,15 +220,38 @@ async def get_applications(
             }
             
             # Get scores if available
-            scores = db.query(ApplicationScore).filter(ApplicationScore.application_id == app.id).order_by(ApplicationScore.created_at.desc()).first()
-            if scores:
-                app_dict.update({
-                    "ai_score": scores.final_score,
-                    "match_score": scores.match_score,
-                    "ats_score": scores.ats_score,
-                    "ai_summary": scores.ai_feedback,
-                    "score_explanation": scores.score_explanation
-                })
+            try:
+                scores = db.query(ApplicationScore).filter(ApplicationScore.application_id == app.id).order_by(ApplicationScore.created_at.desc()).first()
+                if scores:
+                    app_dict.update({
+                        "ai_score": scores.final_score,
+                        "match_score": scores.match_score,
+                        "ats_score": scores.ats_score,
+                        "ai_summary": scores.ai_feedback,
+                        "score_explanation": getattr(scores, 'score_explanation', None)
+                    })
+            except Exception as e:
+                # Handle case where score_explanation column doesn't exist yet
+                logger.warning(f"Error loading scores for application {app.id}: {e}")
+                # Try to query without the problematic column using raw SQL
+                try:
+                    result = db.execute(text("""
+                        SELECT final_score, match_score, ats_score, ai_feedback
+                        FROM application_scores
+                        WHERE application_id = :app_id
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                    """), {"app_id": app.id}).first()
+                    if result:
+                        app_dict.update({
+                            "ai_score": result[0],
+                            "match_score": result[1],
+                            "ats_score": result[2],
+                            "ai_summary": result[3],
+                            "score_explanation": None
+                        })
+                except Exception as e2:
+                    logger.error(f"Error loading scores with fallback query: {e2}")
             
             result.append(app_dict)
     
@@ -350,15 +374,38 @@ async def get_application(
     }
     
     # Get scores if available
-    scores = db.query(ApplicationScore).filter(ApplicationScore.application_id == application.id).order_by(ApplicationScore.created_at.desc()).first()
-    if scores:
-        app_dict.update({
-            "ai_score": scores.final_score,
-            "match_score": scores.match_score,
-            "ats_score": scores.ats_score,
-            "ai_summary": scores.ai_feedback,
-            "score_explanation": scores.score_explanation
-        })
+    try:
+        scores = db.query(ApplicationScore).filter(ApplicationScore.application_id == application.id).order_by(ApplicationScore.created_at.desc()).first()
+        if scores:
+            app_dict.update({
+                "ai_score": scores.final_score,
+                "match_score": scores.match_score,
+                "ats_score": scores.ats_score,
+                "ai_summary": scores.ai_feedback,
+                "score_explanation": getattr(scores, 'score_explanation', None)
+            })
+    except Exception as e:
+        # Handle case where score_explanation column doesn't exist yet
+        logger.warning(f"Error loading scores for application {application.id}: {e}")
+        try:
+            from sqlalchemy import text
+            result = db.execute(text("""
+                SELECT final_score, match_score, ats_score, ai_feedback
+                FROM application_scores
+                WHERE application_id = :app_id
+                ORDER BY created_at DESC
+                LIMIT 1
+            """), {"app_id": application.id}).first()
+            if result:
+                app_dict.update({
+                    "ai_score": result[0],
+                    "match_score": result[1],
+                    "ats_score": result[2],
+                    "ai_summary": result[3],
+                    "score_explanation": None
+                })
+        except Exception as e2:
+            logger.error(f"Error loading scores with fallback query: {e2}")
     
     return app_dict
 
@@ -500,10 +547,12 @@ async def rescore_application(
         score = await scoring_service.score_application(db, application)
         return {"message": "Application rescored successfully", "score": score.final_score}
     except Exception as e:
-        logger.error(f"Error rescoring application: {e}")
+        logger.error(f"Error rescoring application: {e}", exc_info=True)
+        # Rollback the transaction to prevent "InFailedSqlTransaction" errors
+        db.rollback()
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Error rescoring application"
+            detail=f"Error rescoring application: {str(e)}"
         )
 
 @router.patch("/{application_id}/final-decision")
@@ -629,14 +678,37 @@ async def get_application_by_reference(
     }
     
     # Get scores if available
-    scores = db.query(ApplicationScore).filter(ApplicationScore.application_id == application.id).order_by(ApplicationScore.created_at.desc()).first()
-    if scores:
-        app_dict.update({
-            "ai_score": scores.final_score,
-            "match_score": scores.match_score,
-            "ats_score": scores.ats_score,
-            "ai_summary": scores.ai_feedback,
-            "score_explanation": scores.score_explanation
-        })
+    try:
+        scores = db.query(ApplicationScore).filter(ApplicationScore.application_id == application.id).order_by(ApplicationScore.created_at.desc()).first()
+        if scores:
+            app_dict.update({
+                "ai_score": scores.final_score,
+                "match_score": scores.match_score,
+                "ats_score": scores.ats_score,
+                "ai_summary": scores.ai_feedback,
+                "score_explanation": getattr(scores, 'score_explanation', None)
+            })
+    except Exception as e:
+        # Handle case where score_explanation column doesn't exist yet
+        logger.warning(f"Error loading scores for application {application.id}: {e}")
+        try:
+            from sqlalchemy import text
+            result = db.execute(text("""
+                SELECT final_score, match_score, ats_score, ai_feedback
+                FROM application_scores
+                WHERE application_id = :app_id
+                ORDER BY created_at DESC
+                LIMIT 1
+            """), {"app_id": application.id}).first()
+            if result:
+                app_dict.update({
+                    "ai_score": result[0],
+                    "match_score": result[1],
+                    "ats_score": result[2],
+                    "ai_summary": result[3],
+                    "score_explanation": None
+                })
+        except Exception as e2:
+            logger.error(f"Error loading scores with fallback query: {e2}")
     
     return app_dict

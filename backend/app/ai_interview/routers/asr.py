@@ -41,12 +41,29 @@ async def transcribe_audio(
             # Transcribe
             transcript = await _asr_service.transcribe_file(
                 tmp_path,
+                language="en",
                 with_timestamps=True
             )
             
             # Save transcript to storage
             storage_path = _storage_service.get_transcript_path(session_id)
-            # TODO: Upload transcript JSON to storage
+            
+            # Upload transcript JSON to storage
+            import json
+            if _storage_service.is_available():
+                try:
+                    with tempfile.NamedTemporaryFile(mode='w', suffix='.json', delete=False) as tmp_json:
+                        json.dump(transcript, tmp_json, indent=2)
+                        tmp_json_path = tmp_json.name
+                    
+                    try:
+                        _storage_service.upload_file(tmp_json_path, storage_path, content_type="application/json")
+                        logger.info(f"Uploaded transcript to storage: {storage_path}")
+                    finally:
+                        if os.path.exists(tmp_json_path):
+                            os.remove(tmp_json_path)
+                except Exception as e:
+                    logger.warning(f"Failed to upload transcript to storage: {e}")
             
             # Update session transcript_url
             from ..models.ai_sessions import AISession

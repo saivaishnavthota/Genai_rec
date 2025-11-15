@@ -28,6 +28,10 @@ def get_db() -> Session:
     db = SessionLocal()
     try:
         yield db
+    except Exception as e:
+        # Rollback on any exception to prevent "InFailedSqlTransaction" errors
+        db.rollback()
+        raise
     finally:
         db.close()
 

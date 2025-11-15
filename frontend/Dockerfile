@@ -18,7 +18,11 @@ RUN addgroup -g 1001 -S nodejs \
 COPY package*.json ./
 
 # Install dependencies (include dev dependencies for development)
-RUN npm install && npm cache clean --force
+# Force reinstall to ensure all packages are properly installed
+RUN npm install --legacy-peer-deps && npm cache clean --force
+
+# Verify face-api.js installation (as root before switching users)
+RUN npm list @vladmandic/face-api || (npm install @vladmandic/face-api --save --legacy-peer-deps && npm cache clean --force)
 
 # Copy source code
 COPY . .

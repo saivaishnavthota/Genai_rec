@@ -197,6 +197,7 @@ Ensure all citations reference document IDs from the provided context.
         # Call Ollama for scoring
         try:
             async with httpx.AsyncClient(timeout=300.0) as client:
+                logger.info(f"Calling Ollama at {self.ollama_url} with model {self.ollama_model}")
                 response = await client.post(
                     f"{self.ollama_url}/api/chat",
                     json={
@@ -223,7 +224,11 @@ Ensure all citations reference document IDs from the provided context.
                     elif "```" in content:
                         content = content.split("```")[1].split("```")[0].strip()
                     
-                    score_data = json.loads(content)
+                    try:
+                        score_data = json.loads(content)
+                    except json.JSONDecodeError as json_err:
+                        logger.error(f"Failed to parse JSON from Ollama response. Content: {content[:500]}")
+                        raise ValueError(f"Invalid JSON response from LLM: {json_err}. Response preview: {content[:200]}")
                     
                     # Convert to ScoreOut schema
                     criteria = [
@@ -250,8 +255,21 @@ Ensure all citations reference document IDs from the provided context.
                         improvement_tip=score_data.get("improvement_tip")
                     )
                 else:
-                    raise ValueError("Unexpected response format")
+                    logger.error(f"Unexpected response format from Ollama: {data}")
+                    raise ValueError(f"Unexpected response format from Ollama. Expected 'message.content', got: {list(data.keys())}")
+        except httpx.ConnectError as e:
+            logger.error(f"Connection error to Ollama at {self.ollama_url}: {e}")
+            raise RuntimeError(f"Cannot connect to Ollama at {self.ollama_url}. Please ensure Ollama is running. Error: {e}")
+        except httpx.TimeoutException as e:
+            logger.error(f"Timeout calling Ollama: {e}")
+            raise RuntimeError(f"Ollama request timed out after 300 seconds. The model may be too slow or Ollama may be overloaded. Error: {e}")
+        except httpx.HTTPStatusError as e:
+            logger.error(f"HTTP error from Ollama: {e.response.status_code} - {e.response.text}")
+            raise RuntimeError(f"Ollama returned HTTP {e.response.status_code}. Error: {e.response.text}")
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON decode error: {e}")
+            raise RuntimeError(f"Failed to parse JSON response from Ollama: {e}")
         except Exception as e:
-            logger.error(f"Scoring error: {e}")
+            logger.error(f"Scoring error: {e}", exc_info=True)
             raise RuntimeError(f"Failed to score interview: {e}")
 

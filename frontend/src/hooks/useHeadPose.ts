@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { detectFaces, calculateHeadPose } from '../lib/mediapipe';
+// Use face-api.js instead of MediaPipe (more reliable, no Docker issues)
+import { detectFaces, calculateHeadPose, initializeFaceDetection } from '../lib/faceDetection';
 import { HeadPose } from '../lib/headpose';
 import { aiInterviewAPI, ClientEvent } from '../lib/api';
 
@@ -81,7 +82,7 @@ export function useHeadPose(): UseHeadPoseReturn {
       const detection = await detectFaces(video, timestamp);
       
       if (!detection) {
-        // No detection result - might be MediaPipe not initialized
+        // No detection result - might be face detection not initialized
         console.warn('detectFaces returned null');
         return;
       }
@@ -135,17 +136,15 @@ export function useHeadPose(): UseHeadPoseReturn {
             };
             trackingRef.current.eventBuffer.push(faceEvent);
 
-            // Add multi_face event if needed
-            if (detection.faceCount > 1) {
-              const multiFaceEvent: ClientEvent = {
-                event_type: 'multi_face',
-                timestamp,
-                confidence: detection.confidence,
-                face_count: detection.faceCount,
-                metadata: {},
-              };
-              trackingRef.current.eventBuffer.push(multiFaceEvent);
-            }
+            // Add multi_face event (always send to track duration correctly)
+            const multiFaceEvent: ClientEvent = {
+              event_type: 'multi_face',
+              timestamp,
+              confidence: detection.faceCount > 1 ? detection.confidence : 0.0,
+              face_count: detection.faceCount,
+              metadata: {},
+            };
+            trackingRef.current.eventBuffer.push(multiFaceEvent);
 
             // Send batch if buffer is full or enough time has passed
             const now = Date.now();
@@ -210,24 +209,38 @@ export function useHeadPose(): UseHeadPoseReturn {
     trackingRef.current.sessionStartTime = sessionStartTime;
     trackingRef.current.lastSendTime = Date.now();
 
-    // Initialize MediaPipe first
-    console.log('Initializing MediaPipe...');
-    import('../lib/mediapipe').then(({ initializeMediaPipe }) => {
-      return initializeMediaPipe();
-    }).then(() => {
-      console.log('MediaPipe initialized successfully, starting frame processing');
-      // Start processing frames immediately
-      processFrame(); // Process first frame
-      // Then start interval
-      const intervalId = window.setInterval(() => {
-        processFrame();
-      }, TELEMETRY_INTERVAL);
-      trackingRef.current.intervalId = intervalId;
-      console.log('Frame processing started at', TELEMETRY_INTERVAL, 'ms interval');
-    }).catch((error) => {
-      console.error('Failed to initialize MediaPipe for tracking:', error);
-      setError(`MediaPipe initialization failed: ${error.message}. Please refresh the page.`);
-    });
+    // Initialize face detection (face-api.js)
+    console.log('Initializing face detection...');
+    initializeFaceDetection()
+      .then((success) => {
+        if (success) {
+          console.log('Face detection initialized successfully, starting frame processing');
+          // Start processing frames immediately
+          processFrame(); // Process first frame
+          // Then start interval
+          const intervalId = window.setInterval(() => {
+            processFrame();
+          }, TELEMETRY_INTERVAL);
+          trackingRef.current.intervalId = intervalId;
+          console.log('Frame processing started at', TELEMETRY_INTERVAL, 'ms interval');
+        } else {
+          // Face detection failed but we can continue without it
+          console.warn('Face detection not available, continuing without proctoring');
+          setError('Face detection unavailable. Interview will continue without proctoring features.');
+          // Set default values so UI doesn't break
+          setFacePresent(false);
+          setFaceCount(0);
+          setConfidence(0);
+        }
+      })
+      .catch((error) => {
+        console.error('Failed to initialize face detection for tracking:', error);
+        // Don't block the interview - just show warning
+        setError('Face detection unavailable. Interview will continue without proctoring features.');
+        setFacePresent(false);
+        setFaceCount(0);
+        setConfidence(0);
+      });
   }, [processFrame]);
 
   const stopTracking = useCallback(() => {

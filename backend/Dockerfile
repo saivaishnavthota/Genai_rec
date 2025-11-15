@@ -33,9 +33,9 @@ COPY requirements.txt .
 RUN pip install --upgrade pip \
     && pip install --no-cache-dir -r requirements.txt
 
-# Create necessary directories
-RUN mkdir -p uploads logs \
-    && chown -R genai:genai /app
+# Create necessary directories including cache for Whisper
+RUN mkdir -p uploads logs /tmp/hf_cache \
+    && chown -R genai:genai /app /tmp/hf_cache
 
 # Copy application code
 COPY . .

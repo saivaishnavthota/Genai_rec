@@ -137,9 +137,9 @@ const AIInterviewReviewPage: React.FC = () => {
               <h1 className="text-2xl font-bold text-gray-900">AI Interview Review</h1>
               <p className="text-sm text-gray-600 mt-1">
                 Session #{report.session.id} | Status: {report.session.status}
-                {report.session.total_score !== null && (
+                {report.session.total_score !== null && report.session.total_score !== undefined && (
                   <span className="ml-2">
-                    | Score: <span className="font-semibold">{report.session.total_score.toFixed(1)}/10</span>
+                    | Score: <span className="font-semibold">{Number(report.session.total_score).toFixed(1)}/10</span>
                   </span>
                 )}
               </p>

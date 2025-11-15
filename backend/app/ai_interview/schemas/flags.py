@@ -2,7 +2,7 @@
 from datetime import datetime
 from typing import Optional, Literal
 from decimal import Decimal
-from pydantic import Field, field_validator, ConfigDict
+from pydantic import Field, field_validator, ConfigDict, field_serializer
 from .base import BaseSchema
 from ..models.ai_sessions import FlagType, FlagSeverity
 
@@ -58,6 +58,11 @@ class FlagOut(BaseSchema):
     clip_url: Optional[str] = None
     metadata: Optional[dict] = Field(None, alias="flag_metadata", description="Additional flag metadata")
     created_at: datetime
+    
+    @field_serializer('t_start', 't_end', 'confidence', when_used='json')
+    def serialize_decimal(self, value: Decimal) -> float:
+        """Convert Decimal to float for JSON serialization"""
+        return float(value)
 
 
 class FlagCreate(BaseSchema):

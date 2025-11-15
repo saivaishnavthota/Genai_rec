@@ -4,7 +4,7 @@ networks:
 
 services:
   postgres:
-    image: postgres:15-alpine
+    image: pgvector/pgvector:pg15
     container_name: genai-postgres
     restart: unless-stopped
     environment:
@@ -92,6 +92,8 @@ services:
       # For Docker Ollama service: use ollama
       - OLLAMA_BASE_URL=http://${OLLAMA_HOST:-host.docker.internal}:11434
       - OLLAMA_MODEL=${OLLAMA_MODEL:-qwen2.5:3b-instruct}
+      # RAG service uses OLLAMA_API_URL (for AI interview scoring)
+      - OLLAMA_API_URL=http://${OLLAMA_HOST:-host.docker.internal}:11434
       # MinIO Configuration (for Docker, use service name)
       - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-minioadmin}
@@ -118,7 +120,9 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    # Remove --reload to avoid memory issues with file watcher in Docker
+    # Use --reload only for local development outside Docker
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
 
   frontend:
     build:
