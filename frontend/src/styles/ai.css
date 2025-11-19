@@ -1,0 +1,93 @@
+/* AI Interview Module Styles */
+
+/* Head Pose Gauge Animation */
+@keyframes pulse-gauge {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.7;
+  }
+}
+
+.head-pose-indicator {
+  animation: pulse-gauge 2s ease-in-out infinite;
+}
+
+/* Flag Toast Animation */
+@keyframes slideInUp {
+  from {
+    transform: translateY(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.flag-toast-enter {
+  animation: slideInUp 0.3s ease-out;
+}
+
+/* Timeline Marker Hover */
+.timeline-marker {
+  transition: all 0.2s ease;
+}
+
+.timeline-marker:hover {
+  transform: scale(1.2);
+  z-index: 10;
+}
+
+/* Video Player Overlay */
+.video-overlay {
+  pointer-events: none;
+}
+
+.video-overlay button {
+  pointer-events: auto;
+}
+
+/* Audio Meter Animation */
+.audio-meter-bar {
+  transition: width 0.1s ease-out;
+}
+
+/* Accessibility: High contrast for flags */
+.flag-severity-high {
+  border-width: 3px;
+}
+
+.flag-severity-moderate {
+  border-width: 2px;
+}
+
+.flag-severity-low {
+  border-width: 1px;
+}
+
+/* Focus states for accessibility */
+.ai-button:focus,
+.ai-input:focus,
+.ai-select:focus {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+/* Loading spinner */
+.interview-loading {
+  border-top-color: #3b82f6;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  .interview-grid {
+    grid-template-columns: 1fr;
+  }
+  
+  .video-preview {
+    aspect-ratio: 16 / 9;
+  }
+}
+
