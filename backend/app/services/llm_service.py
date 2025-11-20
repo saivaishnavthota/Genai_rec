@@ -1,6 +1,5 @@
 import logging
 import json
-import os
 from typing import List, Dict, Any, Optional
 from ..config import settings
 import httpx
@@ -611,7 +610,7 @@ We are seeking a qualified {role_title} to join our dynamic team. {role_descript
             # Truncate resume text to avoid token limits (keep first 2000 chars)
             resume_summary = resume_text[:2000] if len(resume_text) > 2000 else resume_text
             
-            prompt = f"""Generate 5 personalized interview questions for a candidate based on their resume and the job requirements.
+            prompt = f"""Generate exactly 2 highly personalized interview questions for a candidate based on their resume and the job requirements.
 
 Job Title: {job_title}
 Job Description: {job_description[:500]}
@@ -621,32 +620,35 @@ Experience Level: {experience_level or "Not specified"}
 Candidate Resume Summary:
 {resume_summary}
 
-Generate 5 interview questions that:
-1. Are personalized based on the candidate's resume content
-2. Test relevant skills and experience mentioned in their resume
+Generate exactly 2 interview questions that:
+1. Are highly personalized based on the candidate's resume content
+2. Test the most relevant skills and experience mentioned in their resume
 3. Are appropriate for the job role and experience level
-4. MUST include 2-3 behavioral questions about past experiences, problem-solving, and teamwork
-5. Include 1-2 technical questions based on their resume and required skills
-6. Are clear, concise, and interview-appropriate
+4. Are clear, concise, and interview-appropriate
+5. Focus on the most important aspects of the role and candidate's background
 
 Return ONLY a JSON array with this exact format:
 [
   {{
     "id": 1,
     "text": "Question text here",
-    "type": "behavioral|technical|experience|closing",
-    "time_limit": 120
+    "type": "behavioral|technical|experience",
+    "time_limit": 60
   }},
-  ...
+  {{
+    "id": 2,
+    "text": "Question text here",
+    "type": "behavioral|technical|experience",
+    "time_limit": 60
+  }}
 ]
 
-Question types (ensure variety):
-- "behavioral": Questions about past experiences, problem-solving, teamwork, challenges faced (MUST HAVE 2-3 OF THESE)
+Question types:
+- "behavioral": Questions about past experiences, problem-solving, teamwork, challenges faced
 - "technical": Questions about specific skills, technologies, or technical knowledge from their resume
 - "experience": Questions about work history and relevant experience mentioned in resume
-- "closing": Final question asking if candidate has questions
 
-Time limits should be in seconds (typically 120-180 seconds per question).
+IMPORTANT: Each question must have a time_limit of exactly 60 seconds (1 minute).
 
 Respond with ONLY the JSON array, no other text."""
 
@@ -678,10 +680,15 @@ Respond with ONLY the JSON array, no other text."""
                                     "id": q.get("id", i + 1),
                                     "text": str(q.get("text", "")),
                                     "type": q.get("type", "behavioral"),
-                                    "time_limit": int(q.get("time_limit", 120))
+                                    "time_limit": 60  # Fixed to 60 seconds (1 minute)
                                 })
                         
-                        if len(validated_questions) >= 3:  # At least 3 questions
+                        if len(validated_questions) >= 2:  # At least 2 questions
+                            # Ensure we only return exactly 2 questions
+                            validated_questions = validated_questions[:2]
+                            # Ensure all questions have 60-second time limit
+                            for q in validated_questions:
+                                q["time_limit"] = 60
                             logger.info(f"✅ Generated {len(validated_questions)} questions successfully")
                             return validated_questions
                         else:
@@ -708,57 +715,32 @@ Respond with ONLY the JSON array, no other text."""
         key_skills: List[str],
         experience_level: Optional[str] = None
     ) -> List[Dict[str, Any]]:
-        """Fallback questions if LLM generation fails"""
+        """Fallback questions if LLM generation fails - returns exactly 2 questions with 60-second timers"""
         questions = []
         
-        # Question 1: Introduction
+        # Question 1: Personalized introduction based on job
         questions.append({
             "id": 1,
-            "text": "Tell us about yourself and why you're interested in this position.",
+            "text": f"Tell us about yourself and why you're interested in the {job_title} position.",
             "type": "behavioral",
-            "time_limit": 120
+            "time_limit": 60
         })
         
-        # Question 2: Role-specific
+        # Question 2: Role-specific skills
         if key_skills:
             skills_text = ", ".join(key_skills[:3])
             questions.append({
                 "id": 2,
                 "text": f"This role requires skills in {skills_text}. Can you share your experience with these technologies?",
                 "type": "technical",
-                "time_limit": 180
-            })
-        
-        # Question 3: Experience
-        if experience_level:
-            questions.append({
-                "id": 3,
-                "text": f"With this being a {experience_level} level position, what relevant experience do you bring to this role?",
-                "type": "experience",
-                "time_limit": 150
+                "time_limit": 60
             })
         else:
             questions.append({
-                "id": 3,
-                "text": "What relevant experience do you bring to this role?",
+                "id": 2,
+                "text": f"What relevant experience and skills do you bring to the {job_title} role?",
                 "type": "experience",
-                "time_limit": 150
-            })
-        
-        # Question 4: Problem-solving
-        questions.append({
-            "id": 4,
-            "text": "Describe a challenging project or problem you've worked on. How did you approach it and what was the outcome?",
-            "type": "behavioral",
-            "time_limit": 180
-        })
-        
-        # Question 5: Closing
-        questions.append({
-            "id": 5,
-            "text": "Do you have any questions about the role or the company?",
-            "type": "closing",
-            "time_limit": 120
+                "time_limit": 60
         })
         
         return questions

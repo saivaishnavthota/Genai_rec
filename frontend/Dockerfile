@@ -3,7 +3,10 @@ FROM node:18-alpine
 # Set environment variables
 ENV NODE_ENV=development \
     GENERATE_SOURCEMAP=false \
-    WATCHPACK_POLLING=true
+    WATCHPACK_POLLING=true \
+    CHOKIDAR_USEPOLLING=true \
+    CHOKIDAR_INTERVAL=1000 \
+    NODE_OPTIONS="--max-old-space-size=1024"
 
 WORKDIR /app
 
@@ -40,5 +43,5 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 # Expose port
 EXPOSE 3000
 
-# Start the application
+# Start the application with memory optimization
 CMD ["npm", "start"]

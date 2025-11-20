@@ -5,7 +5,6 @@ from ..models.application import Application, ApplicationScore
 from ..config import settings
 from ..services.llm_service import LLMService
 import logging
-import json
 
 logger = logging.getLogger(__name__)
 

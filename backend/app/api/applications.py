@@ -8,7 +8,7 @@ from ..models.application import Application, ApplicationScore
 from ..models.job import Job
 from ..models.user import User
 from ..schemas.application import (
-    ApplicationCreate, ApplicationResponse, ApplicationUpdate, 
+    ApplicationResponse, ApplicationUpdate, 
     ApplicationListResponse, ApplicationStatsResponse
 )
 from ..services.scoring_service import ScoringService

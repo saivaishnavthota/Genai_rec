@@ -34,7 +34,9 @@ const AIInterviewRoomPage: React.FC = () => {
   const [interviewDuration, setInterviewDuration] = useState(0);
   const [questionNumber, setQuestionNumber] = useState(1);
   const [questions, setQuestions] = useState<Array<{ id: number; text: string; type: string; time_limit: number }>>([]);
-  const [totalQuestions, setTotalQuestions] = useState(5);
+  const [totalQuestions, setTotalQuestions] = useState(2);
+  const [questionStartTime, setQuestionStartTime] = useState<number>(0);
+  const [questionTimeRemaining, setQuestionTimeRemaining] = useState<number>(60);
   const [dismissedFlags, setDismissedFlags] = useState<Set<number>>(new Set());
   const [isPlayingAudio, setIsPlayingAudio] = useState(false);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -115,8 +117,9 @@ const AIInterviewRoomPage: React.FC = () => {
           console.log('Recording stopped. Total chunks:', recordedChunksRef.current.length);
         };
 
-        // Start recording, collecting data every second
-        recorder.start(1000);
+        // Start recording, collecting data every 500ms for faster chunking and upload
+        // This helps with faster video processing and storage
+        recorder.start(500);
         mediaRecorderRef.current = recorder;
         recordingMimeTypeRef.current = options.mimeType || 'video/webm';
         recordedChunksRef.current = []; // Reset chunks
@@ -192,15 +195,12 @@ const AIInterviewRoomPage: React.FC = () => {
         console.log('Loaded questions:', questionsData);
       } catch (error) {
         console.error('Failed to load questions:', error);
-        // Use default questions if API fails
+        // Use default questions if API fails (2 questions with 60-second timers)
         setQuestions([
-          { id: 1, text: "Tell us about yourself and why you're interested in this position.", type: "behavioral", time_limit: 120 },
-          { id: 2, text: "Can you share your experience with the required technologies?", type: "technical", time_limit: 180 },
-          { id: 3, text: "What relevant experience do you bring to this role?", type: "experience", time_limit: 150 },
-          { id: 4, text: "Describe a challenging project you've worked on. How did you approach it?", type: "behavioral", time_limit: 180 },
-          { id: 5, text: "Do you have any questions about the role or the company?", type: "closing", time_limit: 120 }
+          { id: 1, text: "Tell us about yourself and why you're interested in this position.", type: "behavioral", time_limit: 60 },
+          { id: 2, text: "Can you share your experience with the required technologies?", type: "technical", time_limit: 60 }
         ]);
-        setTotalQuestions(5);
+        setTotalQuestions(2);
       }
 
       // Start head pose tracking - use the visible VideoPreview element instead of hidden one
@@ -424,13 +424,40 @@ const AIInterviewRoomPage: React.FC = () => {
     }
   };
 
-  // Auto-play question audio when question changes
+  // Auto-play question audio when question changes and reset timer
   useEffect(() => {
     if (stage === 'live' && questions.length > 0 && questions[questionNumber - 1]) {
       const currentQuestion = questions[questionNumber - 1];
       playQuestionAudio(currentQuestion.id);
+      // Reset question timer
+      setQuestionStartTime(Date.now());
+      setQuestionTimeRemaining(currentQuestion.time_limit);
     }
   }, [questionNumber, stage, questions]);
+
+  // Update question timer countdown
+  useEffect(() => {
+    if (stage === 'live' && questionStartTime > 0 && questions.length > 0 && questions[questionNumber - 1]) {
+      const currentQuestion = questions[questionNumber - 1];
+      const timeLimit = currentQuestion.time_limit;
+      
+      const interval = setInterval(() => {
+        const elapsed = (Date.now() - questionStartTime) / 1000;
+        const remaining = Math.max(0, timeLimit - elapsed);
+        setQuestionTimeRemaining(remaining);
+        
+        // Auto-advance to next question when time runs out
+        if (remaining <= 0 && questionNumber < totalQuestions) {
+          handleNextQuestion();
+        } else if (remaining <= 0 && questionNumber >= totalQuestions) {
+          // All questions completed
+          handleEndInterview();
+        }
+      }, 100);
+
+      return () => clearInterval(interval);
+    }
+  }, [stage, questionStartTime, questionNumber, questions, totalQuestions]);
 
   // Handle question navigation
   const handleNextQuestion = () => {
@@ -438,8 +465,11 @@ const AIInterviewRoomPage: React.FC = () => {
       setQuestionNumber((prev) => prev + 1);
       console.log(`Moving to question ${questionNumber + 1}`);
     } else {
-      // Last question - could auto-advance or show completion
+      // Last question completed - auto-end interview after a short delay
       console.log('All questions completed');
+      setTimeout(() => {
+        handleEndInterview();
+      }, 2000);
     }
   };
 
@@ -624,8 +654,17 @@ const AIInterviewRoomPage: React.FC = () => {
                       <p className="text-gray-800 text-base leading-relaxed">
                         {questions[questionNumber - 1].text}
                       </p>
-                      <div className="mt-3 text-xs text-gray-500">
-                        Time limit: {Math.floor(questions[questionNumber - 1].time_limit / 60)}:{(questions[questionNumber - 1].time_limit % 60).toString().padStart(2, '0')}
+                      <div className="mt-3 flex items-center justify-between">
+                        <span className="text-xs text-gray-500">
+                          Time limit: {Math.floor(questions[questionNumber - 1].time_limit / 60)}:{(questions[questionNumber - 1].time_limit % 60).toString().padStart(2, '0')}
+                        </span>
+                        <span className={`text-sm font-mono font-semibold ${
+                          questionTimeRemaining <= 10 ? 'text-red-600' : 
+                          questionTimeRemaining <= 30 ? 'text-orange-600' : 
+                          'text-gray-700'
+                        }`}>
+                          {Math.floor(questionTimeRemaining / 60)}:{(Math.floor(questionTimeRemaining % 60)).toString().padStart(2, '0')}
+                        </span>
                       </div>
                     </div>
                   ) : (

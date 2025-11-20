@@ -333,3 +333,102 @@ GenAI Hiring Team
         logger.warning(f"Failed to create calendar invite for {recipient_type}: {e}")
     
     return send_email([recipient_email], subject, body, html_body, attachments)
+
+def send_ai_interview_invitation_email(
+    candidate_email: str,
+    candidate_name: str,
+    job_title: str,
+    interview_link: str
+) -> bool:
+    """Send AI interview invitation email to candidate with interview link"""
+    subject = f"🎥 AI Interview Invitation - {job_title}"
+    
+    body = f"""
+Dear {candidate_name},
+
+We are pleased to invite you to complete an AI-powered interview for the {job_title} position.
+
+INTERVIEW DETAILS:
+- Position: {job_title}
+- Interview Type: AI-Powered Video Interview
+- Duration: Approximately 2 minutes (2 questions, 1 minute each)
+- Format: You will answer personalized questions based on your resume and the job requirements
+
+INTERVIEW LINK:
+{interview_link}
+
+IMPORTANT INSTRUCTIONS:
+1. Click the link above to start your interview
+2. Ensure you have a working camera and microphone
+3. Find a quiet, well-lit environment
+4. You will have 1 minute to answer each question
+5. The interview will be automatically recorded for review
+
+PREPARATION TIPS:
+- Review the job description before starting
+- Have your resume handy for reference
+- Test your camera and microphone beforehand
+- Ensure a stable internet connection
+
+If you experience any technical issues, please contact our HR team immediately.
+
+Best regards,
+GenAI Hiring Team
+    """
+    
+    html_body = f"""
+    <html>
+        <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333;">
+            <div style="max-width: 600px; margin: 0 auto; padding: 20px;">
+                <h2 style="color: #2563eb;">🎥 AI Interview Invitation</h2>
+                <p>Dear {candidate_name},</p>
+                <p>We are pleased to invite you to complete an <strong>AI-powered interview</strong> for the <strong>{job_title}</strong> position.</p>
+                
+                <div style="background-color: #f0f9ff; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #2563eb;">
+                    <h3 style="color: #2563eb; margin: 0 0 15px 0;">Interview Details:</h3>
+                    <ul style="margin: 0; padding-left: 20px;">
+                        <li><strong>Position:</strong> {job_title}</li>
+                        <li><strong>Interview Type:</strong> AI-Powered Video Interview</li>
+                        <li><strong>Duration:</strong> Approximately 2 minutes (2 questions, 1 minute each)</li>
+                        <li><strong>Format:</strong> You will answer personalized questions based on your resume and the job requirements</li>
+                    </ul>
+                </div>
+                
+                <div style="background-color: #dcfce7; padding: 25px; border-radius: 8px; margin: 25px 0; text-align: center; border: 2px solid #16a34a;">
+                    <h3 style="color: #16a34a; margin: 0 0 15px 0;">🚀 Start Your Interview</h3>
+                    <p style="margin: 0 0 20px 0; font-size: 14px; color: #374151;">Click the button below to begin your AI interview:</p>
+                    <a href="{interview_link}" style="background-color: #16a34a; color: white; padding: 15px 30px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold; font-size: 16px;">START INTERVIEW</a>
+                    <p style="margin: 15px 0 0 0; font-size: 12px; color: #6b7280;">Or copy this link: <a href="{interview_link}" style="color: #2563eb; word-break: break-all;">{interview_link}</a></p>
+                </div>
+                
+                <div style="background-color: #fef3c7; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #f59e0b;">
+                    <h3 style="color: #92400e; margin: 0 0 15px 0;">⚠️ Important Instructions:</h3>
+                    <ol style="margin: 0; padding-left: 20px; color: #78350f;">
+                        <li>Click the link above to start your interview</li>
+                        <li>Ensure you have a working camera and microphone</li>
+                        <li>Find a quiet, well-lit environment</li>
+                        <li>You will have 1 minute to answer each question</li>
+                        <li>The interview will be automatically recorded for review</li>
+                    </ol>
+                </div>
+                
+                <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                    <h3 style="margin: 0 0 15px 0;">💡 Preparation Tips:</h3>
+                    <ul style="margin: 0; padding-left: 20px;">
+                        <li>Review the job description before starting</li>
+                        <li>Have your resume handy for reference</li>
+                        <li>Test your camera and microphone beforehand</li>
+                        <li>Ensure a stable internet connection</li>
+                    </ul>
+                </div>
+                
+                <p style="color: #6b7280; font-size: 14px;">If you experience any technical issues, please contact our HR team immediately.</p>
+                
+                <br>
+                <p>Best regards,<br><strong>GenAI Hiring Team</strong></p>
+            </div>
+        </body>
+    </html>
+    """
+    
+    return send_email([candidate_email], subject, body, html_body)

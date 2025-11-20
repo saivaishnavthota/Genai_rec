@@ -1,7 +1,0 @@
-/**
- * DEPRECATED: This file is kept for reference but is no longer used.
- * The system now uses face-api.js instead (see faceDetection.ts)
- * 
- * This file can be safely deleted after confirming face-api.js works.
- */
-

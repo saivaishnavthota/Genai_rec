@@ -107,8 +107,9 @@ class InterviewService:
         db.commit()
         db.refresh(session)
         
-        # TODO: Enqueue scoring job
-        logger.info(f"Session {session_id} ended, finalizing...")
+        # Note: Scoring will be automatically triggered after transcription completes
+        # See _transcribe_video_async in proctor.py router
+        logger.info(f"Session {session_id} ended, finalizing... Scoring will be auto-triggered after transcription.")
         return session
     
     def get_report(

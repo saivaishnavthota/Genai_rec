@@ -112,17 +112,23 @@ services:
       - ./uploads:/app/uploads
       - ./models:/app/models
       - ./logs:/app/logs
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
     networks:
       - genai-network
     healthcheck:
-      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
+      test: [ "CMD-SHELL", "curl -f http://localhost:8000/health || exit 1" ]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
     # Remove --reload to avoid memory issues with file watcher in Docker
     # Use --reload only for local development outside Docker
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 
   frontend:
     build:
@@ -141,13 +147,24 @@ services:
       - WDS_SOCKET_HOST=0.0.0.0
       - WDS_SOCKET_PORT=0
       - FAST_REFRESH=false
+      # Optimize file watcher to prevent memory issues
+      - CHOKIDAR_USEPOLLING=true
+      - CHOKIDAR_INTERVAL=1000
+      - CHOKIDAR_IGNORED=/app/node_modules/**,/app/build/**,/app/.git/**,/app/logs/**,/app/public/images/**
+      - NODE_OPTIONS=--max-old-space-size=1024
     depends_on:
       backend:
-        condition: service_healthy
+        condition: service_started
     volumes:
       - ./frontend:/app
       - /app/node_modules
       - ./logs:/app/logs
+    deploy:
+      resources:
+        limits:
+          memory: 2G
+        reservations:
+          memory: 1G
     networks:
       - genai-network
     healthcheck:

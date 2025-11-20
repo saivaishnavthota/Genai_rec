@@ -47,6 +47,24 @@ async def start_interview(
     Auth: Candidate or HR with invite token
     """
     try:
+        # Get application and job details for email
+        from ...models.application import Application
+        from ...models.job import Job
+        
+        application = db.query(Application).filter(Application.id == request.application_id).first()
+        if not application:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Application {request.application_id} not found"
+            )
+        
+        job = db.query(Job).filter(Job.id == request.job_id).first()
+        if not job:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Job {request.job_id} not found"
+            )
+        
         # Create session
         session = _interview_service.create_session(
             db,
@@ -60,12 +78,43 @@ async def start_interview(
         # Generate WebRTC token
         token = _webrtc_service.generate_token(session.id, request.application_id)
         
+        # Send interview invitation email to candidate
+        try:
+            from ...utils.interview_emails import send_ai_interview_invitation_email
+            from ...config import settings
+            
+            # Generate interview link
+            interview_link = f"{settings.frontend_url}/ai-interview/{session.id}"
+            
+            # Get candidate name and email
+            candidate_name = application.full_name or application.candidate_email.split('@')[0]
+            candidate_email = application.candidate_email
+            job_title = job.title or "the position"
+            
+            # Send email
+            email_sent = send_ai_interview_invitation_email(
+                candidate_email=candidate_email,
+                candidate_name=candidate_name,
+                job_title=job_title,
+                interview_link=interview_link
+            )
+            
+            if email_sent:
+                logger.info(f"✅ Interview invitation email sent to {candidate_email} for session {session.id}")
+            else:
+                logger.warning(f"⚠️ Failed to send interview invitation email to {candidate_email} for session {session.id}")
+        except Exception as e:
+            # Don't fail the request if email fails
+            logger.error(f"Failed to send interview invitation email: {e}", exc_info=True)
+        
         return SessionStartResponse(
             session_id=session.id,
             webrtc_token=token,
             policy_version=session.policy_version,
             rubric_version=session.rubric_version
         )
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Failed to start interview: {e}")
         raise HTTPException(
@@ -946,6 +995,86 @@ async def _analyze_video_for_flags_async(session_id: int, video_path: str):
         logger.info(f"🏁 Video analysis task completed for session {session_id}")
 
 
+async def _score_session_async(session_id: int, transcript_data: dict):
+    """Internal function to score a session automatically (no auth required)"""
+    from ...database import SessionLocal
+    from ..models.ai_sessions import AISession
+    from decimal import Decimal
+    from datetime import datetime
+    
+    db = SessionLocal()
+    try:
+        session = db.query(AISession).filter(AISession.id == session_id).first()
+        if not session:
+            logger.warning(f"Session {session_id} not found for auto-scoring")
+            return
+        
+        # Check if already scored
+        if session.report_json and "scores" in session.report_json:
+            logger.info(f"Session {session_id} already scored, skipping auto-scoring")
+            return
+        
+        # Extract transcript text
+        transcript_text = ""
+        if isinstance(transcript_data, dict) and 'segments' in transcript_data:
+            segments = transcript_data['segments']
+            transcript_text = ' '.join([seg.get('text', '') for seg in segments if isinstance(seg, dict)])
+        elif isinstance(transcript_data, dict) and 'text' in transcript_data:
+            transcript_text = transcript_data['text']
+        elif isinstance(transcript_data, list):
+            transcript_text = ' '.join([seg.get('text', '') for seg in transcript_data if isinstance(seg, dict)])
+        elif isinstance(transcript_data, str):
+            transcript_text = transcript_data
+        
+        if not transcript_text or len(transcript_text.strip()) == 0:
+            logger.warning(f"Transcript is empty for session {session_id}, cannot score")
+            return
+        
+        logger.info(f"Auto-scoring session {session_id} with transcript length: {len(transcript_text)} chars")
+        
+        # Use existing service instances
+        # Score using RAG
+        scores = await _rag_service.score_interview(
+            db,
+            transcript_text,
+            session_id,
+            session.job_id
+        )
+        
+        # Update session
+        session.total_score = scores.final_score
+        
+        # Convert Decimal to float for JSON serialization
+        scores_dict = scores.model_dump()
+        def convert_decimals(obj):
+            if isinstance(obj, Decimal):
+                return float(obj)
+            elif isinstance(obj, dict):
+                return {k: convert_decimals(v) for k, v in obj.items()}
+            elif isinstance(obj, list):
+                return [convert_decimals(item) for item in obj]
+            return obj
+        
+        scores_dict = convert_decimals(scores_dict)
+        
+        session.report_json = {
+            "scores": scores_dict,
+            "scored_at": str(datetime.utcnow())
+        }
+        
+        # Calculate recommendation
+        recommendation = _interview_service.calculate_recommendation(db, session_id)
+        session.recommendation = recommendation
+        
+        db.commit()
+        logger.info(f"✅ Auto-scoring completed for session {session_id}: score={scores.final_score}, recommendation={recommendation}")
+        
+    except Exception as e:
+        logger.error(f"Failed to auto-score session {session_id}: {e}", exc_info=True)
+        db.rollback()
+    finally:
+        db.close()
+
 async def _transcribe_video_async(session_id: int, video_path: str):
     """Background task to transcribe video after upload"""
     from ...database import SessionLocal
@@ -989,6 +1118,15 @@ async def _transcribe_video_async(session_id: int, video_path: str):
                 session.transcript_url = transcript_path
                 db.commit()
                 logger.info(f"Session {session_id} transcript saved successfully")
+                
+                # Automatically trigger scoring after transcription completes
+                try:
+                    logger.info(f"🤖 Auto-triggering scoring for session {session_id} after transcription")
+                    await _score_session_async(session_id, transcript)
+                    logger.info(f"✅ Auto-scoring completed for session {session_id}")
+                except Exception as e:
+                    logger.error(f"⚠️ Failed to auto-score session {session_id}: {e}", exc_info=True)
+                    # Don't fail transcription if scoring fails
             finally:
                 if os.path.exists(tmp_json_path):
                     os.remove(tmp_json_path)

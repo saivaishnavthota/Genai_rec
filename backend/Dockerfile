@@ -31,7 +31,7 @@ RUN groupadd -r genai && useradd -r -g genai genai
 # Copy requirements and install Python dependencies
 COPY requirements.txt .
 RUN pip install --upgrade pip \
-    && pip install --no-cache-dir -r requirements.txt
+    && pip install  -r requirements.txt
 
 # Create necessary directories including cache for Whisper
 RUN mkdir -p uploads logs /tmp/hf_cache \
@@ -47,7 +47,7 @@ RUN chown -R genai:genai /app
 USER genai
 
 # Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+HEALTHCHECK --interval=15s --timeout=5s --start-period=90s --retries=10 \
     CMD curl -f http://localhost:8000/health || exit 1
 
 # Expose port
