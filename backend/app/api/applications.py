@@ -12,12 +12,14 @@ from ..schemas.application import (
     ApplicationListResponse, ApplicationStatsResponse
 )
 from ..services.scoring_service import ScoringService
+from ..services.application_processor_service import application_processor_service
 from ..utils.file_utils import save_uploaded_file, validate_file_type
 from ..utils.resume_parser import parse_resume
 from ..utils.email import send_application_confirmation, send_shortlist_notification
 from ..utils.final_decision_emails import send_candidate_hired_email, send_candidate_rejected_email
 from .auth import get_current_user
 import logging
+import asyncio
 
 router = APIRouter()
 scoring_service = ScoringService()
@@ -40,10 +42,12 @@ async def submit_application(
     """Submit a job application (public endpoint)"""
     try:
         # Validate job exists and is published
-        job = db.query(Job).filter(
-            Job.id == job_id,
-            Job.status == "published",
-            Job.is_active == True
+        # Import Job at function level to avoid scoping issues with nested exception handlers
+        from ..models.job import Job as JobModel
+        job = db.query(JobModel).filter(
+            JobModel.id == job_id,
+            JobModel.status == "published",
+            JobModel.is_active == True
         ).first()
         
         if not job:
@@ -96,9 +100,14 @@ async def submit_application(
         db.commit()
         db.refresh(application)
         
-        # Parse resume in background
+        # Parse resume and score application
         try:
+            logger.info(f"Starting resume parsing for application {application.id}")
             parsed_data = parse_resume(filepath, filename)
+            logger.info(f"Resume parsed successfully for application {application.id}. Skills: {len(parsed_data.get('parsed_skills', []))}")
+            
+            # Refresh application to ensure we have the latest state
+            db.refresh(application)
             
             # Update application with parsed data
             application.parsed_skills = parsed_data.get('parsed_skills', [])
@@ -107,12 +116,74 @@ async def submit_application(
             application.parsed_certifications = parsed_data.get('parsed_certifications', [])
             
             db.commit()
+            db.refresh(application)
+            logger.info(f"Application {application.id} updated with parsed data")
             
-            # Score the application
-            await scoring_service.score_application(db, application)
+            # Score the application - ensure we have a fresh session
+            logger.info(f"Starting scoring for application {application.id}, job_id: {application.job_id}")
+            try:
+                score = await scoring_service.score_application(db, application)
+                logger.info(f"✅ Application {application.id} scored successfully. Final score: {score.final_score}")
+            except Exception as score_error:
+                import traceback
+                logger.error(f"❌ Scoring failed for application {application.id}: {score_error}")
+                logger.error(f"Scoring traceback: {traceback.format_exc()}")
+                # Re-raise to see the error, but don't fail the application submission
+                raise
             
         except Exception as e:
-            logger.error(f"Error processing resume for application {application.id}: {e}")
+            import traceback
+            error_trace = traceback.format_exc()
+            logger.error(f"❌ Error processing resume/scoring for application {application.id}: {e}")
+            logger.error(f"Full traceback: {error_trace}")
+            # Try to score anyway with basic scoring (without LLM explanation)
+            try:
+                logger.info(f"Attempting basic scoring for application {application.id} after error...")
+                # Refresh application to get latest state
+                db.refresh(application)
+                # Try basic scoring without resume update flow
+                from ..services.scoring_service import ScoringService
+                basic_scoring = ScoringService()
+                # Create a minimal score record
+                # Use JobModel to avoid scoping issues
+                from ..models.job import Job as JobModel
+                job = db.query(JobModel).filter(JobModel.id == application.job_id).first()
+                if job:
+                    match_scores = basic_scoring.calculate_match_score(job, application)
+                    parsed_data = {
+                        'parsed_skills': application.parsed_skills,
+                        'parsed_experience': application.parsed_experience,
+                        'parsed_education': application.parsed_education,
+                        'parsed_certifications': application.parsed_certifications
+                    }
+                    ats_scores = basic_scoring.calculate_ats_score_breakdown(parsed_data, application.resume_filename)
+                    match_score = sum(score for score in match_scores.values() if score > 0) / len([s for s in match_scores.values() if s > 0]) if any(match_scores.values()) else 0
+                    ats_score = sum(ats_scores.values()) / len(ats_scores) if ats_scores else 0
+                    final_score = basic_scoring.calculate_final_score(match_scores, ats_scores)
+                    
+                    from ..models.application import ApplicationScore
+                    basic_score = ApplicationScore(
+                        application_id=application.id,
+                        match_score=match_score,
+                        ats_score=ats_score,
+                        final_score=final_score,
+                        skills_match=match_scores.get('skills_match'),
+                        experience_match=match_scores.get('experience_match'),
+                        education_match=match_scores.get('education_match'),
+                        certification_match=match_scores.get('certification_match'),
+                        ats_format_score=ats_scores.get('ats_format_score'),
+                        ats_keywords_score=ats_scores.get('ats_keywords_score'),
+                        ats_structure_score=ats_scores.get('ats_structure_score'),
+                        scoring_details={**match_scores, **ats_scores},
+                        ai_feedback=basic_scoring.generate_ai_feedback(job, application, {**match_scores, **ats_scores}),
+                        score_explanation=None  # No LLM explanation due to error
+                    )
+                    db.add(basic_score)
+                    db.commit()
+                    logger.info(f"✅ Basic scoring completed for application {application.id} (without LLM explanation)")
+            except Exception as fallback_error:
+                logger.error(f"❌ Fallback scoring also failed for application {application.id}: {fallback_error}")
+                # Application is created but without scores - this is acceptable
         
         # Send confirmation email
         try:
@@ -124,6 +195,15 @@ async def submit_application(
             )
         except Exception as e:
             logger.error(f"Error sending confirmation email: {e}")
+        
+        # Trigger background processing immediately (non-blocking)
+        # This ensures scoring and description generation happens even if it failed during submission
+        try:
+            logger.info(f"🚀 Triggering background processing for application {application.id}")
+            asyncio.create_task(application_processor_service.process_application_immediately(application.id))
+        except Exception as e:
+            logger.error(f"Error triggering background processing for application {application.id}: {e}")
+            # Don't fail the submission if background trigger fails
         
         return {
             "id": application.id,
@@ -525,31 +605,37 @@ async def rescore_application(
             detail="Only HR and Admin can rescore applications"
         )
     
-    application = db.query(Application).join(Job).filter(
-        Application.id == application_id
-    ).first()
-    
-    if not application:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Application not found"
-        )
-    
-    # Check permissions
-    if current_user.user_type != "admin" and application.job.company_id != current_user.company_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
-        )
-    
     try:
+        application = db.query(Application).join(Job).filter(
+            Application.id == application_id
+        ).first()
+        
+        if not application:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Application not found"
+            )
+        
+        # Check permissions
+        if current_user.user_type != "admin" and application.job.company_id != current_user.company_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied"
+            )
+        
         # Rescore the application
         score = await scoring_service.score_application(db, application)
         return {"message": "Application rescored successfully", "score": score.final_score}
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
-        logger.error(f"Error rescoring application: {e}", exc_info=True)
+        logger.error(f"Error rescoring application {application_id}: {e}", exc_info=True)
         # Rollback the transaction to prevent "InFailedSqlTransaction" errors
-        db.rollback()
+        try:
+            db.rollback()
+        except Exception as rollback_error:
+            logger.error(f"Error during rollback: {rollback_error}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error rescoring application: {str(e)}"

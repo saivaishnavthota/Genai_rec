@@ -32,6 +32,27 @@ export function useMediaDevices(): UseMediaDevicesReturn {
 
   const refreshDevices = useCallback(async () => {
     try {
+      // Check if mediaDevices API is available (requires HTTPS or localhost)
+      if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) {
+        const isSecureContext = window.isSecureContext || window.location.protocol === 'https:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+        if (!isSecureContext) {
+          setError('Camera and microphone access requires HTTPS. Please access this page via HTTPS (https://) instead of HTTP.');
+          return;
+        }
+        setError('MediaDevices API is not available in this browser. Please use a modern browser that supports camera/microphone access.');
+        return;
+      }
+
+      // Request permission first to get device labels (labels are empty until permission is granted)
+      try {
+        await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      } catch (permErr: any) {
+        // Permission denied is okay, we just need permission for labels
+        if (permErr.name !== 'NotAllowedError' && permErr.name !== 'PermissionDeniedError') {
+          throw permErr;
+        }
+      }
+
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videos = devices
         .filter((d) => d.kind === 'videoinput')
@@ -50,8 +71,14 @@ export function useMediaDevices(): UseMediaDevicesReturn {
       if (!selectedAudioDeviceId && audios.length > 0) {
         setSelectedAudioDeviceId(audios[0].deviceId);
       }
-    } catch (err) {
-      setError(`Failed to enumerate devices: ${err}`);
+      
+      // Clear error if devices were found
+      if (videos.length > 0 || audios.length > 0) {
+        setError(null);
+      }
+    } catch (err: any) {
+      const errorMessage = err?.message || String(err);
+      setError(`Failed to enumerate devices: ${errorMessage}`);
     }
   }, [selectedVideoDeviceId, selectedAudioDeviceId]);
 
@@ -64,6 +91,17 @@ export function useMediaDevices(): UseMediaDevicesReturn {
     setError(null);
 
     try {
+      // Check if mediaDevices API is available
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        const isSecureContext = window.isSecureContext || window.location.protocol === 'https:' || window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
+        if (!isSecureContext) {
+          setError('Camera and microphone access requires HTTPS. Please access this page via HTTPS (https://) instead of HTTP.');
+          return;
+        }
+        setError('MediaDevices API is not available in this browser. Please use a modern browser that supports camera/microphone access.');
+        return;
+      }
+
       const constraints: MediaStreamConstraints = {
         video: selectedVideoDeviceId
           ? { deviceId: { exact: selectedVideoDeviceId } }
@@ -75,13 +113,14 @@ export function useMediaDevices(): UseMediaDevicesReturn {
 
       const mediaStream = await navigator.mediaDevices.getUserMedia(constraints);
       setStream(mediaStream);
+      setError(null); // Clear any previous errors
     } catch (err: any) {
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         setError('Camera/microphone permission denied. Please allow access and try again.');
       } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
         setError('No camera or microphone found. Please connect a device and try again.');
       } else {
-        setError(`Failed to access media devices: ${err.message}`);
+        setError(`Failed to access media devices: ${err.message || err}`);
       }
     } finally {
       setIsLoading(false);

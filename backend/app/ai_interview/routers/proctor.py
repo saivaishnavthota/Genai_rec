@@ -87,8 +87,8 @@ async def start_interview(
             interview_link = f"{settings.frontend_url}/ai-interview/{session.id}"
             
             # Get candidate name and email
-            candidate_name = application.full_name or application.candidate_email.split('@')[0]
-            candidate_email = application.candidate_email
+            candidate_name = application.full_name or application.email.split('@')[0]
+            candidate_email = application.email
             job_title = job.title or "the position"
             
             # Send email

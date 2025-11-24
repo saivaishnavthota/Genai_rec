@@ -34,8 +34,9 @@ class LLMService:
         # Use custom timeout if provided, otherwise use default
         request_timeout = timeout if timeout is not None else self.timeout
         # Convert to httpx.Timeout if it's an integer
+        # Set read timeout to the full value, connect timeout to 30 seconds
         if isinstance(request_timeout, int):
-            timeout_obj = httpx.Timeout(request_timeout, connect=10.0)
+            timeout_obj = httpx.Timeout(connect=30.0, read=float(request_timeout), write=30.0, pool=30.0)
         else:
             timeout_obj = request_timeout
 
@@ -45,6 +46,8 @@ class LLMService:
             "options": {
                 "temperature": temperature if temperature is not None else self.temperature,
                 "num_predict": max_tokens if max_tokens is not None else self.max_tokens,
+                "num_ctx": 2048,  # Reduce context window for faster processing
+                "num_thread": 4,  # Use 4 threads for faster inference
             },
             # We want a single final message string (non-stream)
             "stream": False,

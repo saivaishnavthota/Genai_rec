@@ -16,10 +16,19 @@ app = FastAPI(
 
 # Configure CORS - Dynamic origins based on environment
 origins = [
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:8000",
-    "http://127.0.0.1:8000",
+    "http://localhost:3000",  # Legacy frontend port
+    "http://127.0.0.1:3000",  # Legacy frontend port
+    "http://localhost:3132",  # Current frontend port
+    "http://127.0.0.1:3132",  # Current frontend port
+    "http://localhost:8000",  # Legacy backend port
+    "http://127.0.0.1:8000",  # Legacy backend port
+    "http://localhost:3131",  # Current backend port
+    "http://127.0.0.1:3131",  # Current backend port
+    "http://149.102.158.71:3132",  # Server frontend (HTTP)
+    "https://149.102.158.71:8443",  # Server frontend (HTTPS)
+    "http://149.102.158.71:3131",  # Server backend
+    "http://149.102.158.71",  # Server without port
+    "https://149.102.158.71",  # Server HTTPS without port
 ]
 
 # Add FRONTEND_URL from environment if set
@@ -123,13 +132,13 @@ async def startup_event():
             # Don't fail startup if tables already exist or DB not ready yet
     
     async def init_scheduler():
-        """Start background scheduler in background"""
+        """Start background scheduler in background (runs 24/7 to process incomplete applications)"""
         try:
             # Wait a bit for other services
             await asyncio.sleep(3)
             from .services.scheduler_service import run_background_scheduler
             asyncio.create_task(run_background_scheduler())
-            print("✅ Background scheduler started for resume update emails")
+            print("✅ Background scheduler started (processes incomplete applications every hour, runs 24/7)")
         except Exception as e:
             print(f"⚠️ Warning: Failed to start background scheduler: {e}")
             # Don't fail startup if scheduler fails

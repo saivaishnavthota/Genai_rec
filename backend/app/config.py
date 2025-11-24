@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     ollama_model: str = "qwen2.5:3b-instruct"  # Default model, can be overridden via env var
     llm_temperature: float = 0.3
     llm_max_tokens: int = 300         # per response
-    llm_timeout_seconds: int = 300    # Increased timeout for detailed explanations (5 minutes)
+    llm_timeout_seconds: int = 1800   # 30 minutes timeout for detailed explanations (user wants it no matter how long)
 
     # (Optional) Local llama.cpp fallback (not required now, but kept if you want)
     model_path: Optional[str] = None
@@ -43,9 +43,9 @@ class Settings(BaseSettings):
     # Email Configuration
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587
-    smtp_username: str = "voyageuraryan@gmail.com"
-    smtp_password: str = "lqlp aymq texs efrk"  # Gmail App Password
-    email_from: str = "voyageuraryan@gmail.com"
+    smtp_username: str = "alphanxzen@gmail.com"
+    smtp_password: str = "rewncxqueiuzfgmd"  # Gmail App Password (no spaces)
+    email_from: str = "alphanxzen@gmail.com"
     
     # File Upload Configuration
     max_file_size: int = 10485760  # 10MB
@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     max_resume_update_attempts: int = 3
     
     # Frontend URL for generating review links (can be overridden via FRONTEND_URL env var)
-    frontend_url: str = "http://localhost:3000"
+    frontend_url: str = "https://149.102.158.71:8443"
     
     # Google Calendar/Meet Configuration
     use_service_account: bool = False
@@ -127,6 +127,6 @@ settings = Settings()
 # This prevents environment variables from overriding the correct email config
 settings.smtp_host = "smtp.gmail.com"
 settings.smtp_port = 587
-settings.smtp_username = "voyageuraryan@gmail.com"
-settings.smtp_password = "lqlp aymq texs efrk"  # Gmail App Password
-settings.email_from = "voyageuraryan@gmail.com"
+settings.smtp_username = "alphanxzen@gmail.com"
+settings.smtp_password = "rewncxqueiuzfgmd"  # Gmail App Password (no spaces)
+settings.email_from = "alphanxzen@gmail.com"

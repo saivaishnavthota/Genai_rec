@@ -206,142 +206,70 @@ class ScoringService:
             matched_skills = [skill for skill in job_skills if skill.lower() in candidate_skills_lower]
             missing_skills = [skill for skill in job_skills if skill.lower() not in candidate_skills_lower]
             
-            # Extract resume text if available
+            # Skip resume text extraction for speed - we already have parsed data
+            # Resume text extraction is slow and we have all the key info from parsing
             resume_text = ""
-            if application.resume_path:
-                try:
-                    from ..utils.resume_parser import extract_text_from_pdf, extract_text_from_docx, extract_text_from_doc
-                    import os
-                    if os.path.exists(application.resume_path):
-                        if application.resume_filename.lower().endswith('.pdf'):
-                            resume_text = extract_text_from_pdf(application.resume_path)
-                        elif application.resume_filename.lower().endswith('.docx'):
-                            resume_text = extract_text_from_docx(application.resume_path)
-                        elif application.resume_filename.lower().endswith('.doc'):
-                            resume_text = extract_text_from_doc(application.resume_path)
-                        # Limit resume text to first 2000 chars to avoid token limits
-                        resume_text = resume_text[:2000] if resume_text else ""
-                except Exception as e:
-                    logger.warning(f"Could not extract resume text: {e}")
-                    resume_text = ""
             
-            # Format experience details
-            newline = "\n"
+            # Format experience details (more concise for speed)
             experience_details = ""
             if candidate_experience:
-                for i, exp in enumerate(candidate_experience[:3], 1):  # Limit to first 3 experiences
+                for i, exp in enumerate(candidate_experience[:2], 1):  # Limit to first 2 experiences only
                     if isinstance(exp, dict):
-                        exp_str = f"{exp.get('title', 'N/A')} at {exp.get('company', 'N/A')}"
+                        exp_str = f"{exp.get('title', 'N/A')}@{exp.get('company', 'N/A')}"
                         if exp.get('duration'):
-                            exp_str += f" ({exp.get('duration')})"
-                        experience_details += f"{newline}  {i}. {exp_str}"
+                            exp_str += f"({exp.get('duration')})"
+                        experience_details += f" {i}.{exp_str}"
                     else:
-                        experience_details += f"{newline}  {i}. {str(exp)}"
+                        experience_details += f" {i}.{str(exp)[:50]}"  # Truncate long strings
             
-            # Format education details
+            # Format education details (more concise)
             education_details = ""
             if candidate_education:
-                for i, edu in enumerate(candidate_education[:3], 1):  # Limit to first 3 education entries
+                for i, edu in enumerate(candidate_education[:2], 1):  # Limit to first 2 education entries
                     if isinstance(edu, dict):
                         edu_str = f"{edu.get('degree', 'N/A')}"
                         if edu.get('university'):
-                            edu_str += f" from {edu.get('university')}"
-                        education_details += f"{newline}  {i}. {edu_str}"
+                            edu_str += f"@{edu.get('university')}"
+                        education_details += f" {i}.{edu_str}"
                     else:
-                        education_details += f"{newline}  {i}. {str(edu)}"
+                        education_details += f" {i}.{str(edu)[:50]}"  # Truncate long strings
             
-            # Prepare default messages for experience and education
-            no_experience_msg = f"{newline}  No experience details extracted"
-            no_education_msg = f"{newline}  No education details extracted"
+            # Prepare default messages for experience and education (not used in current prompt but kept for compatibility)
+            no_experience_msg = "No experience details extracted"
+            no_education_msg = "No education details extracted"
             
-            # Build comprehensive prompt for LLM
-            prompt = f"""You are an expert HR analyst and recruitment consultant. Analyze this candidate's application and provide a VERY DETAILED, comprehensive explanation of why they received these specific scores.
+            # Build optimized prompt for faster LLM processing
+            # Reduced verbosity while maintaining quality
+            prompt = f"""Analyze candidate {application.full_name} for {job.title} role.
 
-=== JOB REQUIREMENTS ===
-Position: {job.title}
-Job Description: {job.description[:800] if job.description else 'No description provided'}
-Required Skills: {', '.join(job_skills) if job_skills else 'Not specified'}
-Required Experience: {job.required_experience if hasattr(job, 'required_experience') and job.required_experience else 'Not specified'}
-Department: {job.department if hasattr(job, 'department') and job.department else 'Not specified'}
-Location: {job.location if hasattr(job, 'location') and job.location else 'Not specified'}
+JOB REQUIREMENTS:
+- Skills: {', '.join(job_skills[:8]) if job_skills else 'Not specified'}
+- Experience: {job.required_experience if hasattr(job, 'required_experience') and job.required_experience else 'Not specified'}
 
-=== CANDIDATE PROFILE ===
-Name: {application.full_name}
-Email: {application.email}
-Phone: {application.phone or 'Not provided'}
+CANDIDATE PROFILE:
+- Skills: {', '.join(candidate_skills[:12]) if candidate_skills else 'None'}
+- Matched: {', '.join(matched_skills[:8]) if matched_skills else 'NONE'}
+- Missing: {', '.join(missing_skills[:8]) if missing_skills else 'NONE'}
+- Experience: {len(candidate_experience)} entries{experience_details[:150] if experience_details else ''}
+- Education: {len(candidate_education)} entries{education_details[:150] if education_details else ''}
 
-CANDIDATE SKILLS FOUND IN RESUME:
-{', '.join(candidate_skills) if candidate_skills else 'No skills extracted from resume'}
+SCORES: Overall {final_score}% | Match {match_score}% (Skills:{match_scores.get('skills_match', 0):.0f}% Exp:{match_scores.get('experience_match', 0):.0f}% Edu:{match_scores.get('education_match', 0):.0f}%) | ATS {ats_score}% (Format:{ats_scores.get('ats_format_score', 0):.0f}% Keywords:{ats_scores.get('ats_keywords_score', 0):.0f}% Structure:{ats_scores.get('ats_structure_score', 0):.0f}%)
 
-SKILL MATCHING ANALYSIS:
-- Skills that MATCH job requirements: {', '.join(matched_skills) if matched_skills else 'NONE'}
-- Skills REQUIRED but MISSING from candidate: {', '.join(missing_skills) if missing_skills else 'NONE - All required skills present'}
-- Candidate's additional skills (not in job requirements): {', '.join([s for s in candidate_skills if s.lower() not in job_skills_lower]) if candidate_skills else 'None'}
+Provide a concise but detailed explanation (250-400 words) covering:
+1. Overall score meaning ({final_score}%) - strong/moderate/weak candidate?
+2. Match analysis - skill gaps, experience fit, education alignment
+3. ATS analysis - format quality, keyword optimization
+4. Top 3-4 strengths
+5. Top 3-4 improvement areas  
+6. Recommendation
 
-CANDIDATE EXPERIENCE:
-Number of experience entries: {len(candidate_experience) if candidate_experience else 0}
-Experience details:{experience_details if experience_details else no_experience_msg}
+Be specific and reference actual data."""
 
-CANDIDATE EDUCATION:
-Number of education entries: {len(candidate_education) if candidate_education else 0}
-Education details:{education_details if education_details else no_education_msg}
-
-CANDIDATE CERTIFICATIONS:
-{', '.join(candidate_certifications) if candidate_certifications else 'No certifications found'}
-
-RESUME CONTENT (First 2000 characters):
-{resume_text if resume_text else 'Resume text not available for analysis'}
-
-COVER LETTER:
-{application.cover_letter[:500] if application.cover_letter else 'No cover letter provided'}
-
-=== SCORING BREAKDOWN ===
-Overall AI Score: {final_score}% (Weighted combination of Match Score and ATS Score)
-
-MATCH SCORE: {match_score}% (How well candidate matches job requirements)
-  - Skills Match: {match_scores.get('skills_match', 0):.1f}% ({len(matched_skills)}/{len(job_skills)} required skills matched)
-  - Experience Match: {match_scores.get('experience_match', 0):.1f}% ({len(candidate_experience)} experience entries found)
-  - Education Match: {match_scores.get('education_match', 0):.1f}% ({len(candidate_education)} education entries found)
-  - Certification Match: {match_scores.get('certification_match', 0):.1f}% ({len(candidate_certifications)} certifications found)
-
-ATS SCORE: {ats_score}% (Resume format and ATS compatibility)
-  - Format Score: {ats_scores.get('ats_format_score', 0):.1f}% (File format: {application.resume_filename.split('.')[-1].upper() if application.resume_filename else 'Unknown'})
-  - Keywords Score: {ats_scores.get('ats_keywords_score', 0):.1f}% ({len(candidate_skills)} skills/keywords found)
-  - Structure Score: {ats_scores.get('ats_structure_score', 0):.1f}% (Resume sections completeness)
-
-=== YOUR TASK ===
-Provide a COMPREHENSIVE, DETAILED explanation (minimum 4-5 paragraphs, 500-800 words) that covers:
-
-1. **Overall Score Analysis**: Explain why this candidate received {final_score}% overall. What does this score mean in practical terms? Is this a strong candidate, moderate, or weak? Why?
-
-2. **Match Score Deep Dive ({match_score}%)**: 
-   - Skills Analysis: Which specific skills match and why that matters. Which missing skills are critical gaps? How do the candidate's additional skills (if any) add value?
-   - Experience Analysis: Detailed assessment of their experience - is it relevant? How many years? Does it align with job requirements? What specific roles/responsibilities are relevant?
-   - Education Analysis: Does their education match requirements? Is the level appropriate? Any notable institutions or degrees?
-   - Certification Analysis: Are required certifications present? How do certifications impact this role?
-
-3. **ATS Score Deep Dive ({ats_score}%)**:
-   - Format Analysis: Why did they get this format score? Is the resume format ATS-friendly?
-   - Keywords Analysis: How well did they optimize for keywords? What keywords are present/missing?
-   - Structure Analysis: Is the resume well-structured? Are all sections present and properly formatted?
-
-4. **Candidate Strengths**: List 3-5 specific strengths this candidate brings to the role. Be specific and reference actual data from their profile.
-
-5. **Areas for Improvement**: List 3-5 specific areas where the candidate could improve. Be constructive and actionable. What would make them a stronger fit?
-
-6. **Final Assessment**: Overall recommendation - is this candidate suitable? What role would they be best suited for? Any concerns or red flags?
-
-IMPORTANT: 
-- Be VERY specific and reference actual data from the candidate's profile
-- Use the candidate's name, specific skills, experience details in your explanation
-- Make this explanation UNIQUE to this candidate - it should not be generic
-- Write in a professional but conversational tone
-- Be thorough and detailed - this is for HR decision-making"""
-
+            # Shorter system message for faster processing
             messages = [
                 {
                     "role": "system", 
-                    "content": "You are an expert HR analyst and recruitment consultant with 15+ years of experience in talent acquisition, candidate evaluation, and hiring decisions. You provide detailed, insightful, and actionable analysis of candidates. Your explanations are comprehensive, specific, and tailored to each individual candidate. You never use generic templates - every explanation is unique based on the candidate's actual profile."
+                    "content": "Expert HR analyst. Provide detailed, specific candidate analysis. Be concise but thorough."
                 },
                 {
                     "role": "user", 
@@ -350,14 +278,16 @@ IMPORTANT:
             ]
             
             logger.info(f"Generating detailed LLM score explanation for application {application.id} - candidate: {application.full_name}")
-            # Increased max_tokens to get longer, more detailed explanations
-            # Use a longer timeout for this operation since it's generating a detailed response
+            # Use a very long timeout (30 minutes) - user wants explanation no matter how long it takes
             from ..config import settings
+            # Use a very long timeout to allow for slow LLM responses
+            explanation_timeout = max(1800, settings.llm_timeout_seconds)  # At least 30 minutes (1800 seconds)
+            logger.info(f"Using timeout of {explanation_timeout} seconds ({explanation_timeout/60:.1f} minutes) for LLM explanation")
             explanation = await self.llm_service._chat_ollama(
                 messages, 
-                temperature=0.4, 
-                max_tokens=1200,
-                timeout=settings.llm_timeout_seconds
+                temperature=0.3,  # Lower temperature for faster, more focused responses
+                max_tokens=800,  # Reduced from 1200 to speed up generation (still enough for detailed explanation)
+                timeout=explanation_timeout
             )
             
             if not explanation or len(explanation.strip()) < 100:
@@ -371,10 +301,11 @@ IMPORTANT:
             error_msg = str(e) if str(e) else "Unknown error"
             error_type = type(e).__name__
             logger.error(f"Error generating LLM score explanation for application {application.id}: {error_type}: {error_msg}", exc_info=True)
-            # Don't fallback to rule-based - return a message indicating LLM explanation failed
-            # This way we can see the issue and fix it
+            # Return None instead of error message - scoring will continue without explanation
+            # The error is already logged for debugging
             model_name = getattr(self.llm_service, 'ollama_model', 'unknown')
-            return f"[LLM Explanation Generation Failed: {error_type}: {error_msg}. Please check logs and ensure Ollama is running with model '{model_name}'. If the model is not installed, run: ollama pull {model_name}]"
+            logger.warning(f"LLM explanation failed for application {application.id}. Model: {model_name}. Error: {error_type}: {error_msg}")
+            return None
     
     async def score_application(self, db: Session, application: Application) -> ApplicationScore:
         """Score an application and return the score object"""
@@ -406,9 +337,19 @@ IMPORTANT:
             ai_feedback = self.generate_ai_feedback(job, application, all_scores)
             
             # Generate detailed LLM explanation for why candidate got these scores
-            # Wrap in try-catch so LLM failures don't break the entire scoring process
+            # User wants this to complete no matter how long it takes
+            # We'll run it synchronously with a very long timeout
+            import asyncio
             score_explanation = None
             try:
+                logger.info(f"🚀 Starting LLM explanation generation for application {application.id} (this may take 10-30 minutes, please be patient)...")
+                from ..config import settings
+                
+                # Generate explanation with a very long timeout (30 minutes) - user wants it no matter how long
+                # Use the full timeout from settings, but ensure it's at least 30 minutes
+                explanation_timeout = max(1800, settings.llm_timeout_seconds)  # At least 30 minutes (1800 seconds)
+                logger.info(f"⏱️  Using timeout of {explanation_timeout} seconds ({explanation_timeout/60:.1f} minutes) for LLM explanation")
+                
                 score_explanation = await self.generate_llm_score_explanation(
                     job=job,
                     application=application,
@@ -418,10 +359,20 @@ IMPORTANT:
                     match_scores=match_scores,
                     ats_scores=ats_scores
                 )
+                
+                if score_explanation:
+                    logger.info(f"✅ LLM explanation generated successfully for application {application.id} ({len(score_explanation)} chars)")
+                else:
+                    logger.warning(f"⚠️  LLM explanation returned None for application {application.id}")
+                    
+            except asyncio.TimeoutError:
+                logger.error(f"⏱️  LLM explanation timed out after {explanation_timeout} seconds for application {application.id}")
+                # Try to generate a basic explanation as fallback
+                score_explanation = f"Detailed explanation generation timed out after {explanation_timeout/60:.1f} minutes. Basic analysis: Final score {final_score}% indicates {'strong' if final_score >= 70 else 'moderate' if final_score >= 50 else 'weak'} candidate match. Match score {match_score}% reflects skills/experience alignment. ATS score {ats_score}% indicates resume format quality."
             except Exception as llm_error:
-                logger.warning(f"Failed to generate LLM score explanation for application {application.id}: {llm_error}")
-                # Continue without explanation - scoring can still succeed
-                score_explanation = None
+                logger.error(f"❌ Failed to generate LLM score explanation for application {application.id}: {llm_error}", exc_info=True)
+                # Generate a basic fallback explanation
+                score_explanation = f"Detailed explanation generation failed. Basic analysis: Final score {final_score}% indicates {'strong' if final_score >= 70 else 'moderate' if final_score >= 50 else 'weak'} candidate match. Match score {match_score}% reflects skills/experience alignment. ATS score {ats_score}% indicates resume format quality."
             
             # Create score record
             application_score = ApplicationScore(
@@ -460,36 +411,49 @@ IMPORTANT:
                 
             elif decision == "llm_evaluation_needed":
                 # Score < 70: Trigger LLM evaluation and potential resume update flow
-                from .resume_update_service import resume_update_service
-                
-                # Check if this is a re-scoring (already has update request)
-                from ..models.resume_update_tracking import ResumeUpdateRequest
-                existing_request = db.query(ResumeUpdateRequest).filter_by(application_id=application.id).first()
-                
-                if existing_request:
-                    # This is a re-scoring after resume update, don't create new request
+                try:
+                    from .resume_update_service import resume_update_service
+                    
+                    # Check if this is a re-scoring (already has update request)
+                    from ..models.resume_update_tracking import ResumeUpdateRequest
+                    existing_request = db.query(ResumeUpdateRequest).filter_by(application_id=application.id).first()
+                    
+                    if existing_request:
+                        # This is a re-scoring after resume update, don't create new request
+                        application.status = status
+                        db.commit()
+                    else:
+                        # Initial scoring, initiate LLM evaluation and potential resume update flow
+                        # Pass detailed scoring information for better LLM evaluation
+                        scoring_context = {
+                            "final_score": final_score,
+                            "match_score": match_score,
+                            "ats_score": ats_score,
+                            "skills_match": match_scores.get('skills_match', 0),
+                            "experience_match": match_scores.get('experience_match', 0),
+                            "education_match": match_scores.get('education_match', 0),
+                            "certification_match": match_scores.get('certification_match', 0)
+                        }
+                        try:
+                            flow_initiated = await resume_update_service.initiate_resume_update_flow(
+                                db, application, final_score, scoring_context
+                            )
+                            
+                            if not flow_initiated:
+                                # LLM rejected or flow failed, set to rejected
+                                application.status = "rejected"
+                                db.commit()
+                        except Exception as flow_error:
+                            # Resume update flow failed, but don't break scoring
+                            logger.warning(f"Resume update flow failed for application {application.id}: {flow_error}")
+                            # Set status to under_review as fallback
+                            application.status = "under_review"
+                            db.commit()
+                except Exception as e:
+                    # If resume update service import or query fails, don't break scoring
+                    logger.warning(f"Error in resume update flow for application {application.id}: {e}")
                     application.status = status
                     db.commit()
-                else:
-                    # Initial scoring, initiate LLM evaluation and potential resume update flow
-                    # Pass detailed scoring information for better LLM evaluation
-                    scoring_context = {
-                        "final_score": final_score,
-                        "match_score": match_score,
-                        "ats_score": ats_score,
-                        "skills_match": match_scores.get('skills_match', 0),
-                        "experience_match": match_scores.get('experience_match', 0),
-                        "education_match": match_scores.get('education_match', 0),
-                        "certification_match": match_scores.get('certification_match', 0)
-                    }
-                    flow_initiated = await resume_update_service.initiate_resume_update_flow(
-                        db, application, final_score, scoring_context
-                    )
-                    
-                    if not flow_initiated:
-                        # LLM rejected or flow failed, set to rejected
-                        application.status = "rejected"
-                        db.commit()
             else:
                 # Other statuses (under_review, rejected)
                 application.status = status

@@ -36,6 +36,8 @@ const ApplicationDetails = () => {
   const [interviewReviews, setInterviewReviews] = useState([]);
   const [aiInterviewSessions, setAiInterviewSessions] = useState([]);
   const [loadingAISessions, setLoadingAISessions] = useState(false);
+  const [interviewStarted, setInterviewStarted] = useState(false);
+  const [interviewStartResult, setInterviewStartResult] = useState(null);
 
   const loadApplication = useCallback(async () => {
     try {
@@ -43,6 +45,9 @@ const ApplicationDetails = () => {
       setError('');
       const data = await applicationService.getApplication(id);
       setApplication(data);
+      // Reset interview start state when loading a new application
+      setInterviewStarted(false);
+      setInterviewStartResult(null);
     } catch (err) {
       setError('Failed to load application details');
       console.error('Error loading application:', err);
@@ -60,7 +65,7 @@ const ApplicationDetails = () => {
     if (!application) return; 
  
     // Check if this application has an active resume update request or was just selected after an update
-    const shouldAutoRefresh = ['resume_update_requested', 'pending_llm_evaluation', 'selected'].includes(application.status);
+    const shouldAutoRefresh = ['resume_update_requested', 'pending_llm_evaluation', 'selected'].includes(application.status); 
  
     if (shouldAutoRefresh) { 
       // Poll every 30 seconds to check for updates 
@@ -71,6 +76,41 @@ const ApplicationDetails = () => {
       return () => clearInterval(interval); 
     } 
   }, [application, loadApplication]);
+
+  // Load AI interview sessions
+  const loadAISessions = useCallback(async () => {
+    if (!id) return;
+    try {
+      setLoadingAISessions(true);
+      const data = await aiInterviewAPI.getApplicationAISessions(parseInt(id));
+      setAiInterviewSessions(data.sessions || []);
+    } catch (err) {
+      console.error('Error loading AI interview sessions:', err);
+      setAiInterviewSessions([]);
+    } finally {
+      setLoadingAISessions(false);
+    }
+  }, [id]);
+
+  // Auto-refresh AI interview sessions if there are any live or finalizing sessions
+  useEffect(() => {
+    if (!id) return;
+    
+    // Check if there are any sessions that need status updates
+    const hasActiveSessions = aiInterviewSessions.some(session => 
+      session.status === 'live' || session.status === 'finalizing' || 
+      (session.ended_at && session.status === 'live')
+    );
+    
+    if (hasActiveSessions) {
+      // Poll every 15 seconds to check for status updates
+      const interval = setInterval(() => {
+        loadAISessions();
+      }, 15000);
+      
+      return () => clearInterval(interval);
+    }
+  }, [id, aiInterviewSessions, loadAISessions]);
 
   const handleStatusUpdate = async (newStatus) => {
     try {
@@ -114,10 +154,11 @@ const ApplicationDetails = () => {
   };
 
   const handleStartAIInterview = async () => {
-    if (!application) return;
+    if (!application || interviewStarted) return;
     
     try {
       setUpdating(true);
+      setInterviewStartResult(null);
       
       // Start AI interview session
       const response = await aiInterviewAPI.startInterview({
@@ -125,35 +166,25 @@ const ApplicationDetails = () => {
         job_id: application.job_id
       });
       
-      // Navigate to AI interview room
-      navigate(`/ai-interview/${response.session_id}`);
+      // Mark as started and show success message
+      setInterviewStarted(true);
+      setInterviewStartResult({
+        success: true,
+        message: `Interview invitation email has been sent successfully to ${application.email}`,
+        sessionId: response.session_id
+      });
+      
+      // Reload application to get updated data
+      await loadApplication();
       
     } catch (err) {
-      Swal.fire({
-        title: 'Failed to Start AI Interview',
-        text: err.response?.data?.detail || 'Could not start AI interview session',
-        icon: 'error',
-        confirmButtonText: 'OK',
-        heightAuto: false,
+      setInterviewStartResult({
+        success: false,
+        message: err.response?.data?.detail || 'Failed to start AI interview session. Could not send invitation email.',
       });
       console.error('Error starting AI interview:', err);
     } finally {
       setUpdating(false);
-    }
-  };
-
-  // Load AI interview sessions
-  const loadAISessions = async () => {
-    if (!id) return;
-    try {
-      setLoadingAISessions(true);
-      const data = await aiInterviewAPI.getApplicationAISessions(parseInt(id));
-      setAiInterviewSessions(data.sessions || []);
-    } catch (err) {
-      console.error('Error loading AI interview sessions:', err);
-      setAiInterviewSessions([]);
-    } finally {
-      setLoadingAISessions(false);
     }
   };
 
@@ -496,15 +527,45 @@ Slots cover: ${fromDate} to ${toDate}.` : '';
                   <ClockIcon className="h-4 w-4 mr-2" />
                   Schedule Interview
                 </button>
-                <button
-                  onClick={handleStartAIInterview}
-                  disabled={updating}
-                  className="flex items-center bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
-                  title="Start AI-powered interview with automated proctoring"
-                >
-                  <UserIcon className="h-4 w-4 mr-2" />
-                  Start AI Interview
-                </button>
+                <div className="flex flex-col gap-2">
+                  <button
+                    onClick={handleStartAIInterview}
+                    disabled={updating || interviewStarted}
+                    className="flex items-center bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2 rounded-md transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+                    title="Start AI-powered interview with automated proctoring"
+                  >
+                    <UserIcon className="h-4 w-4 mr-2" />
+                    {interviewStarted ? 'Interview Invitation Sent' : 'Start AI Interview'}
+                  </button>
+                  
+                  {/* Report/Status Message */}
+                  {interviewStartResult && (
+                    <div className={`p-3 rounded-md text-sm ${
+                      interviewStartResult.success 
+                        ? 'bg-green-50 border border-green-200 text-green-800' 
+                        : 'bg-red-50 border border-red-200 text-red-800'
+                    }`}>
+                      <div className="flex items-start">
+                        {interviewStartResult.success ? (
+                          <CheckCircleIcon className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0" />
+                        ) : (
+                          <XCircleIcon className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0" />
+                        )}
+                        <div>
+                          <p className="font-medium">
+                            {interviewStartResult.success ? 'Success' : 'Error'}
+                          </p>
+                          <p className="mt-1">{interviewStartResult.message}</p>
+                          {interviewStartResult.sessionId && (
+                            <p className="mt-1 text-xs opacity-75">
+                              Session ID: {interviewStartResult.sessionId}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
                 <button
                   onClick={() => handleStatusUpdate('rejected')}
                   disabled={updating}
@@ -527,15 +588,45 @@ Slots cover: ${fromDate} to ${toDate}.` : '';
                   <CalendarDaysIcon className="h-4 w-4 mr-2" />
                   Fetch Availability
                 </button>
-                <button
-                  onClick={handleStartAIInterview}
-                  disabled={updating}
-                  className="flex items-center bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2 rounded-md transition-colors"
-                  title="Start AI-powered interview with automated proctoring"
-                >
-                  <UserIcon className="h-4 w-4 mr-2" />
-                  Start AI Interview
-                </button>
+                <div className="flex flex-col gap-2">
+                  <button
+                    onClick={handleStartAIInterview}
+                    disabled={updating || interviewStarted}
+                    className="flex items-center bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-4 py-2 rounded-md transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+                    title="Start AI-powered interview with automated proctoring"
+                  >
+                    <UserIcon className="h-4 w-4 mr-2" />
+                    {interviewStarted ? 'Interview Invitation Sent' : 'Start AI Interview'}
+                  </button>
+                  
+                  {/* Report/Status Message */}
+                  {interviewStartResult && (
+                    <div className={`p-3 rounded-md text-sm ${
+                      interviewStartResult.success 
+                        ? 'bg-green-50 border border-green-200 text-green-800' 
+                        : 'bg-red-50 border border-red-200 text-red-800'
+                    }`}>
+                      <div className="flex items-start">
+                        {interviewStartResult.success ? (
+                          <CheckCircleIcon className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0" />
+                        ) : (
+                          <XCircleIcon className="h-5 w-5 mr-2 mt-0.5 flex-shrink-0" />
+                        )}
+                        <div>
+                          <p className="font-medium">
+                            {interviewStartResult.success ? 'Success' : 'Error'}
+                          </p>
+                          <p className="mt-1">{interviewStartResult.message}</p>
+                          {interviewStartResult.sessionId && (
+                            <p className="mt-1 text-xs opacity-75">
+                              Session ID: {interviewStartResult.sessionId}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
               </>
             )}
 
@@ -912,7 +1003,18 @@ Slots cover: ${fromDate} to ${toDate}.` : '';
           </div>
           
           <div className="space-y-3">
-            {aiInterviewSessions.map((session) => (
+            {aiInterviewSessions.map((session) => {
+              // Determine effective status: if ended_at exists but status is still 'live', treat as finalizing
+              const effectiveStatus = session.ended_at && session.status === 'live' 
+                ? 'finalizing' 
+                : session.status;
+              
+              // Show View Report button if completed, finalizing, or has ended_at (interview finished)
+              const showViewReport = effectiveStatus === 'completed' || 
+                                    effectiveStatus === 'finalizing' || 
+                                    session.ended_at !== null;
+              
+              return (
               <div key={session.id} className="bg-white rounded-lg p-4 border border-gray-200 shadow-sm">
                 <div className="flex items-center justify-between">
                   <div className="flex-1">
@@ -921,12 +1023,15 @@ Slots cover: ${fromDate} to ${toDate}.` : '';
                         Session #{session.id}
                       </span>
                       <span className={`px-2 py-1 rounded-full text-xs font-semibold ${
-                        session.status === 'completed' ? 'bg-green-100 text-green-800' :
-                        session.status === 'live' ? 'bg-blue-100 text-blue-800' :
-                        session.status === 'finalizing' ? 'bg-yellow-100 text-yellow-800' :
+                        effectiveStatus === 'completed' ? 'bg-green-100 text-green-800' :
+                        effectiveStatus === 'finalizing' ? 'bg-yellow-100 text-yellow-800' :
+                        effectiveStatus === 'live' ? 'bg-blue-100 text-blue-800' :
                         'bg-gray-100 text-gray-800'
                       }`}>
-                        {session.status?.toUpperCase() || 'CREATED'}
+                        {effectiveStatus === 'completed' ? 'COMPLETED' :
+                         effectiveStatus === 'finalizing' ? 'FINALIZING' :
+                         effectiveStatus === 'live' ? 'LIVE' :
+                         effectiveStatus?.toUpperCase() || 'CREATED'}
                     </span>
                     </div>
                     
@@ -970,7 +1075,7 @@ Slots cover: ${fromDate} to ${toDate}.` : '';
                   </div>
                   
                   <div className="flex gap-2 ml-4">
-                    {(session.status === 'completed' || session.status === 'finalizing') && (
+                    {showViewReport && (
                       <button
                         onClick={() => navigate(`/review/ai-interview/${session.id}`)}
                         className="px-4 py-2 bg-primary-600 text-white rounded-md hover:bg-primary-700 text-sm font-medium"
@@ -978,18 +1083,11 @@ Slots cover: ${fromDate} to ${toDate}.` : '';
                         View Report
                       </button>
                     )}
-                    {session.status === 'live' && (
-                      <button
-                        onClick={() => navigate(`/ai-interview/${session.id}`)}
-                        className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 text-sm font-medium"
-                      >
-                        View Live
-                      </button>
-                    )}
+                    {/* View Live button removed - only show View Report for completed/finalizing sessions */}
                   </div>
                 </div>
               </div>
-            ))}
+            )})}
           </div>
         </div>
       )}
