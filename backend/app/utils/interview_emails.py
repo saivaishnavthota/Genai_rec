@@ -1,6 +1,7 @@
 from .email import send_email
 from .calendar_utils import create_interview_calendar_invite, create_ics_filename
 from ..config import settings
+from datetime import date
 import logging
 
 logger = logging.getLogger(__name__)
@@ -100,9 +101,16 @@ GenAI Hiring System
     
     return send_email([hr_email], subject, body, html_body)
 
-def send_availability_request_email(candidate_email: str, candidate_name: str, job_title: str, available_slots: list, application_id: int) -> bool:
+def send_availability_request_email(candidate_email: str, candidate_name: str, job_title: str, available_slots: list, application_id: int, slots_from: date = None, slots_to: date = None) -> bool:
     """Send availability request email with slots to candidate"""
     subject = f"Interview Scheduling - Please select your preferred time slot"
+    
+    # Format date range if provided
+    date_range_text = ""
+    date_range_html = ""
+    if slots_from and slots_to:
+        date_range_text = f"\nAvailable slots are from {slots_from.strftime('%B %d, %Y')} to {slots_to.strftime('%B %d, %Y')}.\n"
+        date_range_html = f'<div style="background-color: #f0f9ff; padding: 15px; border-radius: 8px; margin: 15px 0; border-left: 4px solid #2563eb;"><p style="margin: 0; color: #1e40af;"><strong>📅 Date Range:</strong> {slots_from.strftime("%B %d, %Y")} to {slots_to.strftime("%B %d, %Y")}</p></div>'
     
     # Format slots by week
     slots_text = ""
@@ -113,7 +121,7 @@ def send_availability_request_email(candidate_email: str, candidate_name: str, j
 Dear {candidate_name},
 
 Thank you for your patience. We would like to schedule your interview for the {job_title} position.
-
+{date_range_text}
 Please select your preferred time slot from the available options below:
 
 AVAILABLE SLOTS (All times are 1-hour interviews):
@@ -138,6 +146,8 @@ GenAI Hiring Team
             <h2>Interview Scheduling</h2>
             <p>Dear {candidate_name},</p>
             <p>Thank you for your patience. We would like to schedule your interview for the <strong>{job_title}</strong> position.</p>
+            
+            {date_range_html}
             
             <p>Please select your preferred time slot from the available options below:</p>
             

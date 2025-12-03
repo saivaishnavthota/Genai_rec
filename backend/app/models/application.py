@@ -44,6 +44,10 @@ class Application(Base):
     hr_notification_sent_at = Column(DateTime(timezone=True), nullable=True)
     final_interview_score = Column(DECIMAL(5,2), nullable=True)
     
+    # Final Decision Details
+    rejection_reason = Column(Text, nullable=True)  # Explanation for rejection
+    tentative_joining_date = Column(DateTime(timezone=True), nullable=True)  # Tentative joining date for hired candidates
+    
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

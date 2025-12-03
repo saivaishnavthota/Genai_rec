@@ -19,7 +19,8 @@ import {
   UserPlusIcon
 } from '@heroicons/react/24/outline';
 import Swal from 'sweetalert2';
-
+import { addDays } from 'date-fns';
+import DateRangePicker from '../../components/DateRangePicker';
 const ApplicationDetails = () => {
   const { applicationId } = useParams();
   const id = applicationId; // For backward compatibility with existing code
@@ -38,7 +39,8 @@ const ApplicationDetails = () => {
   const [loadingAISessions, setLoadingAISessions] = useState(false);
   const [interviewStarted, setInterviewStarted] = useState(false);
   const [interviewStartResult, setInterviewStartResult] = useState(null);
-
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [selectedDateRange, setSelectedDateRange] = useState({ start: null, end: null });
   const loadApplication = useCallback(async () => {
     try {
       setLoading(true);
@@ -189,54 +191,80 @@ const ApplicationDetails = () => {
   };
 
   const handleFetchAvailability = async () => {
-    // Confirm action before generating and sending availability
-    const resultConfirm = await Swal.fire({
-      title: 'Fetch Availability?',
-      text: 'This will generate interview slots and email the candidate.',
-      icon: 'question',
-      showCancelButton: true,
-      confirmButtonText: 'Send Availability',
-      cancelButtonText: 'Cancel',
-      confirmButtonColor: '#AF69ED',
-      cancelButtonColor: '#6b7280',
+  // If no range selected yet → just open the date picker and exit
+  if (!selectedDateRange.start || !selectedDateRange.end) {
+    setShowDatePicker(true);
+    return;
+  }
+
+  const { start, end } = selectedDateRange;
+
+  const fromDateFormatted = start.toLocaleDateString();
+  const toDateFormatted = end.toLocaleDateString();
+
+  // Ask for confirmation AFTER dates are selected
+  const resultConfirm = await Swal.fire({
+    title: 'Fetch Availability?',
+    text: `This will generate interview slots from ${fromDateFormatted} to ${toDateFormatted} and email the candidate.`,
+    icon: 'question',
+    showCancelButton: true,
+    confirmButtonText: 'Send Availability',
+    cancelButtonText: 'Cancel',
+    confirmButtonColor: '#AF69ED',
+    cancelButtonColor: '#6b7280',
+    heightAuto: false,
+  });
+
+  if (!resultConfirm.isConfirmed) return;
+
+  try {
+    setUpdating(true);
+    setError('');
+
+    // Call API with selected range
+    const result = await interviewService.fetchAvailability(id, {
+      from_date: start.toISOString(),
+      to_date: end.toISOString(),
+    });
+
+    await loadApplication();
+
+    const fromDisplay = result?.slots_from
+      ? new Date(result.slots_from).toLocaleDateString()
+      : fromDateFormatted;
+    const toDisplay = result?.slots_to
+      ? new Date(result.slots_to).toLocaleDateString()
+      : toDateFormatted;
+
+    const slotsInfo = result?.slots_count ? ` (${result.slots_count} slots)` : '';
+    const rangeInfo = `Slots cover: ${fromDisplay} to ${toDisplay}.`;
+
+    await Swal.fire({
+      title: 'Availability Requested',
+      text: `${result?.message ?? 'Availability slots generated and email sent.'}${slotsInfo}\n${rangeInfo}`,
+      icon: 'success',
+      confirmButtonText: 'OK',
       heightAuto: false,
     });
 
-    if (!resultConfirm.isConfirmed) return;
+    setShowDatePicker(false);
+  } catch (err) {
+    setError('Failed to fetch availability slots');
+    console.error('Error fetching availability:', err);
 
-    try {
-      setUpdating(true);
-      const result = await interviewService.fetchAvailability(id);
-      await loadApplication(); // Reload data
-      setError('');
+    Swal.fire({
+      title: 'Error',
+      text: err.response?.data?.detail || 'Failed to fetch availability slots',
+      icon: 'error',
+      confirmButtonText: 'OK',
+      heightAuto: false,
+    });
+  } finally {
+    setUpdating(false);
+  }
+};
 
-      const fromDate = result?.slots_from ? new Date(result.slots_from).toLocaleDateString() : null;
-      const toDate = result?.slots_to ? new Date(result.slots_to).toLocaleDateString() : null;
-      const slotsInfo = result?.slots_count ? ` (${result.slots_count} slots)` : '';
-      const rangeInfo = fromDate && toDate ? `
-Slots cover: ${fromDate} to ${toDate}.` : '';
 
-      await Swal.fire({
-        title: 'Availability Requested',
-        text: `${result?.message ?? 'Availability slots generated and email sent.'}${slotsInfo}${rangeInfo ? `\n${rangeInfo}` : ''}`,
-        icon: 'success',
-        confirmButtonText: 'OK',
-        heightAuto: false,
-      });
-    } catch (err) {
-      setError('Failed to fetch availability slots');
-      console.error('Error fetching availability:', err);
-      Swal.fire({
-        title: 'Error',
-        text: err.response?.data?.detail || 'Failed to fetch availability slots',
-        icon: 'error',
-        confirmButtonText: 'OK',
-        heightAuto: false,
-      });
-    } finally {
-      setUpdating(false);
-    }
-  };
 
   const handleScheduleInterview = async (interviewerData) => {
     try {
@@ -291,25 +319,99 @@ Slots cover: ${fromDate} to ${toDate}.` : '';
 
   const handleFinalDecision = async (decision) => {
     const isHire = decision === 'hired';
-    const resultConfirm = await Swal.fire({
-      title: isHire ? 'Hire Candidate?' : 'Reject Candidate?',
-      text: isHire
-        ? 'This will mark the candidate as hired and send an email notification.'
-        : 'This will mark the candidate as rejected and send an email notification.',
-      icon: 'question',
-      showCancelButton: true,
-      confirmButtonText: isHire ? 'Confirm Hire' : 'Confirm Reject',
-      cancelButtonText: 'Cancel',
-      confirmButtonColor: isHire ? '#AF69ED' : '#dc2626',
-      cancelButtonColor: '#6b7280',
-      heightAuto: false,
-    });
-
-    if (!resultConfirm.isConfirmed) return;
+    
+    // Show input form based on decision type
+    let inputOptions = {};
+    let inputValue = '';
+    
+    if (isHire) {
+      // For hiring, ask for tentative joining date
+      const { value: joiningDate } = await Swal.fire({
+        title: 'Hire Candidate',
+        html: `
+          <p style="margin-bottom: 15px;">Please provide the tentative joining date for the candidate.</p>
+          <input 
+            id="joining-date" 
+            type="date" 
+            class="swal2-input" 
+            style="width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px;"
+            required
+          />
+        `,
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonText: 'Confirm Hire',
+        cancelButtonText: 'Cancel',
+        confirmButtonColor: '#AF69ED',
+        cancelButtonColor: '#6b7280',
+        heightAuto: false,
+        didOpen: () => {
+          // Set minimum date to today
+          const dateInput = document.getElementById('joining-date');
+          if (dateInput) {
+            const today = new Date().toISOString().split('T')[0];
+            dateInput.setAttribute('min', today);
+          }
+        },
+        preConfirm: () => {
+          const dateInput = document.getElementById('joining-date');
+          if (!dateInput || !dateInput.value) {
+            Swal.showValidationMessage('Please select a tentative joining date');
+            return false;
+          }
+          return dateInput.value;
+        }
+      });
+      
+      if (!joiningDate) return; // User cancelled
+      inputValue = joiningDate;
+    } else {
+      // For rejection, ask for rejection reason
+      const { value: rejectionReason } = await Swal.fire({
+        title: 'Reject Candidate',
+        html: `
+          <p style="margin-bottom: 15px;">Please provide a reason for rejection. This will be included in the email sent to the candidate.</p>
+          <textarea 
+            id="rejection-reason" 
+            class="swal2-textarea" 
+            placeholder="Enter rejection reason..."
+            style="width: 100%; min-height: 100px; padding: 10px; border: 1px solid #ddd; border-radius: 4px; resize: vertical;"
+            required
+          ></textarea>
+        `,
+        icon: 'question',
+        showCancelButton: true,
+        confirmButtonText: 'Confirm Reject',
+        cancelButtonText: 'Cancel',
+        confirmButtonColor: '#dc2626',
+        cancelButtonColor: '#6b7280',
+        heightAuto: false,
+        preConfirm: () => {
+          const reasonInput = document.getElementById('rejection-reason');
+          if (!reasonInput || !reasonInput.value.trim()) {
+            Swal.showValidationMessage('Please provide a rejection reason');
+            return false;
+          }
+          return reasonInput.value.trim();
+        }
+      });
+      
+      if (!rejectionReason) return; // User cancelled
+      inputValue = rejectionReason;
+    }
 
     try {
       setUpdating(true);
-      const result = await interviewService.makeFinalDecision(id, decision);
+      
+      // Prepare decision data
+      const decisionData = { decision };
+      if (isHire) {
+        decisionData.tentative_joining_date = inputValue;
+      } else {
+        decisionData.rejection_reason = inputValue;
+      }
+      
+      const result = await interviewService.makeFinalDecision(id, decisionData);
       await loadApplication(); // Reload data
       setError('');
       await Swal.fire({
@@ -580,14 +682,17 @@ Slots cover: ${fromDate} to ${toDate}.` : '';
             {/* SELECTED - HR needs to fetch availability */}
             {application.status === 'selected' && (
               <>
-                <button
-                  onClick={handleFetchAvailability}
-                  disabled={updating}
-                  className="flex items-center bg-purple-500 hover:bg-purple-600 text-white font-medium px-4 py-2 rounded-md transition-colors"
-                >
-                  <CalendarDaysIcon className="h-4 w-4 mr-2" />
-                  Fetch Availability
-                </button>
+               <button
+  onClick={handleFetchAvailability}
+  disabled={updating}
+  className="flex items-center bg-purple-500 hover:bg-purple-600 text-white font-medium px-4 py-2 rounded-md transition-colors"
+>
+  <CalendarDaysIcon className="h-4 w-4 mr-2" />
+  Fetch Availability
+</button>
+
+
+
                 <div className="flex flex-col gap-2">
                   <button
                     onClick={handleStartAIInterview}
@@ -691,7 +796,15 @@ Slots cover: ${fromDate} to ${toDate}.` : '';
           </div>
         )}
       </div>
-
+                {showDatePicker && (
+  <div className="mt-4">
+    <DateRangePicker
+      defaultStartDate={selectedDateRange.start}
+      defaultEndDate={selectedDateRange.end}
+      onDateRangeSelect={(range) => setSelectedDateRange(range)}
+    />
+  </div>
+)}
       <div className="grid grid-cols-1 xl:grid-cols-4 lg:grid-cols-3 gap-4">
         {/* Main Content */}
         <div className="xl:col-span-3 lg:col-span-2 grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -1206,10 +1319,9 @@ const ScheduleInterviewModal = ({ application, onClose, onSchedule, updating }) 
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Secondary Interviewer Name *</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Secondary Interviewer Name</label>
               <input
                 type="text"
-                required
                 value={formData.backup_interviewer_name}
                 onChange={(e) => handleChange('backup_interviewer_name', e.target.value)}
                 className="w-full border border-purple-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-50 bg-white/80"
@@ -1217,10 +1329,9 @@ const ScheduleInterviewModal = ({ application, onClose, onSchedule, updating }) 
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Secondary Interviewer Email *</label>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Secondary Interviewer Email</label>
               <input
                 type="email"
-                required
                 value={formData.backup_interviewer_email}
                 onChange={(e) => handleChange('backup_interviewer_email', e.target.value)}
                 className="w-full border border-purple-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-purple-50 bg-white/80"

@@ -33,9 +33,14 @@ class ReviewEmailData(BaseModel):
     subject: str
     body: str
 
+class FetchAvailabilityRequest(BaseModel):
+    from_date: Optional[str] = None  # ISO format date string
+    to_date: Optional[str] = None    # ISO format date string
+
 @router.post("/fetch-availability/{application_id}")
 async def fetch_availability(
     application_id: int,
+    date_range: Optional[FetchAvailabilityRequest] = None,
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -73,7 +78,27 @@ async def fetch_availability(
         )
     
     try:
-        result = await interview_service.fetch_availability_slots(db, application_id)
+        # Extract date range if provided
+        from_date = None
+        to_date = None
+        if date_range and date_range.from_date and date_range.to_date:
+            from datetime import datetime
+            # Handle ISO format strings (with or without timezone)
+            try:
+                # Try parsing with timezone first
+                if 'Z' in date_range.from_date or '+' in date_range.from_date or date_range.from_date.count(':') > 1:
+                    from_date = datetime.fromisoformat(date_range.from_date.replace('Z', '+00:00')).date()
+                    to_date = datetime.fromisoformat(date_range.to_date.replace('Z', '+00:00')).date()
+                else:
+                    # Parse as date-only string (YYYY-MM-DD)
+                    from_date = datetime.fromisoformat(date_range.from_date).date()
+                    to_date = datetime.fromisoformat(date_range.to_date).date()
+            except ValueError:
+                # Fallback: try parsing as date string
+                from_date = datetime.strptime(date_range.from_date.split('T')[0], '%Y-%m-%d').date()
+                to_date = datetime.strptime(date_range.to_date.split('T')[0], '%Y-%m-%d').date()
+        
+        result = await interview_service.fetch_availability_slots(db, application_id, from_date, to_date)
         
         if result["success"]:
             return {

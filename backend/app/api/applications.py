@@ -232,19 +232,31 @@ async def get_applications(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    """Get applications (HR and Admin only)"""
+    """Get applications (HR, Admin, and Account Managers for their jobs)"""
     try:
-        if current_user.user_type not in ["hr", "admin"]:
+        if current_user.user_type not in ["hr", "admin", "account_manager"]:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="Only HR and Admin can view applications"
+                detail="Only HR, Admin, and Account Managers can view applications"
             )
         
-        query = db.query(Application).join(Job)
+        # Defer columns that might not exist in the database
+        from sqlalchemy.orm import defer
+        query = db.query(Application).options(
+            defer(Application.rejection_reason),
+            defer(Application.tentative_joining_date)
+        ).join(Job)
         
-        # Filter by company for non-admin users
-        if current_user.user_type != "admin":
-            query = query.filter(Job.company_id == current_user.company_id)
+        # Account managers can only see applications for jobs they created
+        if current_user.user_type == "account_manager":
+            query = query.filter(Job.created_by == current_user.id)
+        # Filter by company for non-admin users (HR)
+        elif current_user.user_type != "admin":
+            if current_user.company_id is not None:
+                query = query.filter(Job.company_id == current_user.company_id)
+            else:
+                # If user has no company_id, return empty result
+                return []
         
         # Apply filters - handle empty strings
         if job_id and job_id > 0:
@@ -315,19 +327,19 @@ async def get_applications(
                 logger.warning(f"Error loading scores for application {app.id}: {e}")
                 # Try to query without the problematic column using raw SQL
                 try:
-                    result = db.execute(text("""
+                    score_result = db.execute(text("""
                         SELECT final_score, match_score, ats_score, ai_feedback
                         FROM application_scores
                         WHERE application_id = :app_id
                         ORDER BY created_at DESC
                         LIMIT 1
                     """), {"app_id": app.id}).first()
-                    if result:
+                    if score_result:
                         app_dict.update({
-                            "ai_score": result[0],
-                            "match_score": result[1],
-                            "ats_score": result[2],
-                            "ai_summary": result[3],
+                            "ai_score": score_result[0],
+                            "match_score": score_result[1],
+                            "ats_score": score_result[2],
+                            "ai_summary": score_result[3],
                             "score_explanation": None
                         })
                 except Exception as e2:
@@ -337,8 +349,13 @@ async def get_applications(
     
         return result
     
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
-        logger.error(f"Error getting applications: {e}")
+        logger.error(f"Error getting applications: {e}", exc_info=True)
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Error loading applications: {str(e)}"
@@ -350,10 +367,10 @@ async def get_application_stats(
     db: Session = Depends(get_db)
 ):
     """Get application statistics"""
-    if current_user.user_type not in ["hr", "admin"]:
+    if current_user.user_type not in ["hr", "admin", "account_manager"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only HR and Admin can view statistics"
+            detail="Only HR, Admin, and Account Managers can view statistics"
         )
     
     query = db.query(Application).join(Job)
@@ -361,6 +378,10 @@ async def get_application_stats(
     # Filter by company for non-admin users
     if current_user.user_type != "admin":
         query = query.filter(Job.company_id == current_user.company_id)
+    
+    # Account managers can only see stats for jobs they created
+    if current_user.user_type == "account_manager":
+        query = query.filter(Job.created_by == current_user.id)
     
     # Get basic stats
     total_applications = query.count()
@@ -374,19 +395,23 @@ async def get_application_stats(
     if current_user.user_type != "admin":
         jobs_query = jobs_query.filter(Job.company_id == current_user.company_id)
     
+    # Account managers can only see stats for jobs they created
+    if current_user.user_type == "account_manager":
+        jobs_query = jobs_query.filter(Job.created_by == current_user.id)
+    
     for job in jobs_query.all():
         app_count = db.query(Application).filter(Application.job_id == job.id).count()
         job_stats[job.title] = app_count
     
-        # Stats by status
-        status_stats = {
-            "pending": query.filter(Application.status == "pending").count(),
-            "under_review": under_review,
-            "shortlisted": shortlisted,
-            "interview_scheduled": query.filter(Application.status == "interview_scheduled").count(),
-            "hired": query.filter(Application.status == "hired").count(),
-            "rejected": rejected
-        }
+    # Stats by status
+    status_stats = {
+        "pending": query.filter(Application.status == "pending").count(),
+        "under_review": under_review,
+        "shortlisted": shortlisted,
+        "interview_scheduled": query.filter(Application.status == "interview_scheduled").count(),
+        "hired": query.filter(Application.status == "hired").count(),
+        "rejected": rejected
+    }
     
     return ApplicationStatsResponse(
         total_applications=total_applications,
@@ -404,7 +429,12 @@ async def get_application(
     db: Session = Depends(get_db)
 ):
     """Get a specific application"""
-    application = db.query(Application).join(Job).filter(
+    # Defer columns that might not exist in the database
+    from sqlalchemy.orm import defer
+    application = db.query(Application).options(
+        defer(Application.rejection_reason),
+        defer(Application.tentative_joining_date)
+    ).join(Job).filter(
         Application.id == application_id
     ).first()
     
@@ -415,17 +445,24 @@ async def get_application(
         )
     
     # Check permissions
-    if current_user.user_type not in ["hr", "admin"]:
+    if current_user.user_type not in ["hr", "admin", "account_manager"]:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Only HR and Admin can view applications"
+            detail="Only HR, Admin, and Account Managers can view applications"
         )
     
-    if current_user.user_type != "admin" and application.job.company_id != current_user.company_id:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access denied"
-        )
+    if current_user.user_type != "admin":
+        if application.job.company_id != current_user.company_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied"
+            )
+        # Account managers can only view applications for jobs they created
+        if current_user.user_type == "account_manager" and application.job.created_by != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only view applications for jobs you created"
+            )
     
     # Transform to expected format
     app_dict = {
@@ -687,6 +724,39 @@ async def make_final_decision(
             detail="Decision must be either 'hired' or 'rejected'"
         )
     
+    # Validate required fields based on decision
+    if new_status == "rejected":
+        rejection_reason = decision_data.get("rejection_reason", "").strip()
+        if not rejection_reason:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Rejection reason is required when rejecting a candidate"
+            )
+        application.rejection_reason = rejection_reason
+        application.tentative_joining_date = None  # Clear joining date if rejecting
+    elif new_status == "hired":
+        tentative_joining_date_str = decision_data.get("tentative_joining_date")
+        if not tentative_joining_date_str:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Tentative joining date is required when hiring a candidate"
+            )
+        try:
+            from datetime import datetime
+            # Parse ISO format date string
+            if 'T' in tentative_joining_date_str:
+                tentative_joining_date = datetime.fromisoformat(tentative_joining_date_str.replace('Z', '+00:00'))
+            else:
+                # If only date provided, assume start of day
+                tentative_joining_date = datetime.fromisoformat(tentative_joining_date_str)
+            application.tentative_joining_date = tentative_joining_date
+        except ValueError as e:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid date format for tentative joining date: {e}"
+            )
+        application.rejection_reason = None  # Clear rejection reason if hiring
+    
     try:
         application.status = new_status
         db.commit()
@@ -700,7 +770,8 @@ async def make_final_decision(
                     candidate_email=application.email,
                     candidate_name=application.full_name,
                     job_title=application.job.title,
-                    company_name=company_name
+                    company_name=company_name,
+                    tentative_joining_date=application.tentative_joining_date
                 )
                 logger.info(f"Hired email sent to {application.email}")
             elif new_status == "rejected":
@@ -708,7 +779,8 @@ async def make_final_decision(
                     candidate_email=application.email,
                     candidate_name=application.full_name,
                     job_title=application.job.title,
-                    company_name=company_name
+                    company_name=company_name,
+                    rejection_reason=application.rejection_reason
                 )
                 logger.info(f"Rejection email sent to {application.email}")
         except Exception as e:
@@ -720,6 +792,8 @@ async def make_final_decision(
             "status": application.status
         }
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Error making final decision for application {application_id}: {e}")
         db.rollback()

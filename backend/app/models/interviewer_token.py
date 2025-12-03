@@ -13,7 +13,7 @@ class InterviewerToken(Base):
     interviewer_email = Column(String(255), nullable=False)
     interviewer_name = Column(String(255), nullable=False)
     application_id = Column(Integer, ForeignKey("applications.id"), nullable=False)
-    interviewer_type = Column(String(50), nullable=False)  # 'primary' or 'backup'
+    interviewer_type = Column(String(50), nullable=False)  # 'primary', 'backup', or 'candidate'
     
     # Token validity
     expires_at = Column(DateTime(timezone=True), nullable=False)
@@ -28,10 +28,12 @@ class InterviewerToken(Base):
     application = relationship("Application", foreign_keys=[application_id])
     
     @classmethod
-    def create_token(cls, interviewer_email: str, interviewer_name: str, application_id: int, interviewer_type: str):
-        """Create a new interviewer token valid for 24 hours"""
+    def create_token(cls, interviewer_email: str, interviewer_name: str, application_id: int, interviewer_type: str, expiration_hours: int = 24):
+        """Create a new interviewer/candidate token
+        Default expiration is 24 hours for interviewers, but can be customized (e.g., 7 days for candidates)
+        """
         token = str(uuid.uuid4())
-        expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+        expires_at = datetime.now(timezone.utc) + timedelta(hours=expiration_hours)
         
         return cls(
             token=token,

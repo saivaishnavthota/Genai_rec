@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { applicationService } from '../../services/applicationService';
+import { jobService } from '../../services/jobService';
 import { useAuth } from '../../context/AuthContext';
 import { 
   EyeIcon,
@@ -19,6 +20,8 @@ const ApplicationList = () => {
   const { user } = useAuth();
   const [searchParams, setSearchParams] = useSearchParams();
   const [applications, setApplications] = useState([]);
+  const [jobs, setJobs] = useState([]);
+  const [jobsLoading, setJobsLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [filters, setFilters] = useState({
@@ -50,6 +53,29 @@ const ApplicationList = () => {
   useEffect(() => {
     loadApplications();
   }, [loadApplications]);
+
+  useEffect(() => {
+    const fetchJobs = async () => {
+      try {
+        setJobsLoading(true);
+        const data = await jobService.getJobs({ limit: 200, sort: 'title', order: 'asc' });
+        if (Array.isArray(data)) {
+          setJobs(data);
+        } else if (Array.isArray(data?.jobs)) {
+          setJobs(data.jobs);
+        } else {
+          setJobs([]);
+        }
+      } catch (err) {
+        console.error('Failed to load jobs for filter:', err);
+        setJobs([]);
+      } finally {
+        setJobsLoading(false);
+      }
+    };
+
+    fetchJobs();
+  }, []);
 
   const handleFilterChange = (key, value) => {
     const newFilters = { ...filters, [key]: value };
@@ -200,6 +226,27 @@ const ApplicationList = () => {
                 <option value="hired">Hired</option>
                 <option value="rejected">Rejected</option>
               </select>
+            </div>
+
+            {/* Job */}
+            <div className="inline-flex items-center gap-2">
+              <span className="text-sm font-medium text-gray-700">Job</span>
+              <select
+                id="filter-job"
+                className="h-9 border border-gray-200 rounded-md px-3 py-1.5 text-sm bg-white focus:ring-2 focus:ring-primary-500 focus:border-primary-500 min-w-[180px]"
+                value={filters.job_id}
+                onChange={(e) => handleFilterChange('job_id', e.target.value)}
+              >
+                <option value="">All Jobs</option>
+                {jobs.map((job) => (
+                  <option key={job.id} value={job.id}>
+                    {job.title}
+                  </option>
+                ))}
+              </select>
+              {jobsLoading && (
+                <span className="text-xs text-gray-500">Loading…</span>
+              )}
             </div>
 
             {/* Sort */}

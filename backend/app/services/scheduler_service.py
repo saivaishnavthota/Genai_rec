@@ -7,8 +7,10 @@ from sqlalchemy import and_
 
 from ..database import get_db
 from ..models.resume_update_tracking import ResumeUpdateRequest
+from ..models.interview_schedule import InterviewSchedule
 from .resume_update_service import resume_update_service
 from .application_processor_service import application_processor_service
+from .interview_service import InterviewService
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,9 @@ class SchedulerService:
             # Check and send resume update emails
             emails_sent = await self.check_resume_update_emails(db)
             
+            # Check and send scheduled candidate review emails
+            candidate_review_emails_sent = await self.check_candidate_review_emails(db)
+            
             # Check for expired requests
             expired_count = await self.mark_expired_requests(db)
             
@@ -72,8 +77,8 @@ class SchedulerService:
             if processing_result.get("processed", 0) > 0 or processing_result.get("failed", 0) > 0:
                 logger.info(f"📊 Application processing: {processing_result.get('processed', 0)} processed, {processing_result.get('failed', 0)} failed")
             
-            if emails_sent > 0 or expired_count > 0:
-                logger.info(f"📧 Resume update emails: {emails_sent} sent, {expired_count} requests expired")
+            if emails_sent > 0 or expired_count > 0 or candidate_review_emails_sent > 0:
+                logger.info(f"📧 Emails: {emails_sent} resume update, {candidate_review_emails_sent} candidate review, {expired_count} requests expired")
             
             if all_fulfilled:
                 logger.info("✅ All applications are fulfilled!")
@@ -101,6 +106,40 @@ class SchedulerService:
             return emails_sent
         except Exception as e:
             logger.error(f"Error checking resume update emails: {e}")
+            return 0
+    
+    async def check_candidate_review_emails(self, db: Session) -> int:
+        """Check for and send scheduled candidate review emails"""
+        try:
+            now = datetime.utcnow()
+            
+            # Find interview schedules where candidate review email is scheduled but not yet sent
+            scheduled_interviews = db.query(InterviewSchedule).filter(
+                and_(
+                    InterviewSchedule.candidate_review_email_scheduled_at.isnot(None),
+                    InterviewSchedule.candidate_review_email_scheduled_at <= now,
+                    InterviewSchedule.candidate_review_email_sent_at.is_(None)
+                )
+            ).all()
+            
+            emails_sent = 0
+            interview_service = InterviewService()
+            
+            for interview_schedule in scheduled_interviews:
+                try:
+                    result = await interview_service.send_candidate_review_email(db, interview_schedule.application_id)
+                    if result.get("success"):
+                        emails_sent += 1
+                        logger.info(f"Candidate review email sent for application {interview_schedule.application_id}")
+                    else:
+                        logger.warning(f"Failed to send candidate review email for application {interview_schedule.application_id}: {result.get('message')}")
+                except Exception as e:
+                    logger.error(f"Error sending candidate review email for application {interview_schedule.application_id}: {e}")
+            
+            return emails_sent
+            
+        except Exception as e:
+            logger.error(f"Error checking candidate review emails: {e}")
             return 0
     
     async def mark_expired_requests(self, db: Session) -> int:
@@ -165,6 +204,7 @@ async def trigger_scheduled_tasks():
         processing_result = await application_processor_service.process_all_incomplete(db)
         
         emails_sent = await scheduler_service.check_resume_update_emails(db)
+        candidate_review_emails_sent = await scheduler_service.check_candidate_review_emails(db)
         expired_count = await scheduler_service.mark_expired_requests(db)
         
         # Check if all fulfilled
@@ -178,6 +218,7 @@ async def trigger_scheduled_tasks():
             "all_applications_fulfilled": all_fulfilled,
             "processing_result": processing_result,
             "emails_sent": emails_sent,
+            "candidate_review_emails_sent": candidate_review_emails_sent,
             "expired_requests": expired_count,
             "timestamp": datetime.utcnow().isoformat()
         }

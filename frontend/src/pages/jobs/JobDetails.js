@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, useNavigate, Link, useLocation } from 'react-router-dom';
 import { jobService } from '../../services/jobService';
+import { applicationService } from '../../services/applicationService';
 import { useAuth } from '../../context/AuthContext';
 import { 
   PencilIcon,
@@ -12,7 +13,9 @@ import {
   CurrencyDollarIcon,
   ClockIcon,
   UserIcon,
-  TagIcon
+  TagIcon,
+  DocumentTextIcon,
+  EyeIcon
 } from '@heroicons/react/24/outline';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -27,6 +30,8 @@ const JobDetails = () => {
   const [job, setJob] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [applicationStats, setApplicationStats] = useState(null);
+  const [loadingStats, setLoadingStats] = useState(false);
 
   const loadJob = useCallback(async () => {
     try {
@@ -40,6 +45,11 @@ const JobDetails = () => {
       
       const data = await jobService.getJob(id);
       setJob(data);
+      
+      // Load application stats if user is account manager or HR/admin
+      if (user?.user_type === 'account_manager' || user?.user_type === 'hr' || user?.user_type === 'admin') {
+        loadApplicationStats(id);
+      }
     } catch (err) {
       const errorMessage = err.message?.includes('Invalid job ID') 
         ? `Invalid job ID provided: ${id}. Please check the URL or go back to the job list.`
@@ -54,6 +64,32 @@ const JobDetails = () => {
   useEffect(() => {
     loadJob();
   }, [loadJob]);
+
+  const loadApplicationStats = async (jobId) => {
+    try {
+      setLoadingStats(true);
+      const applications = await applicationService.getApplications({ job_id: jobId, limit: 1000 });
+      
+      // Calculate stats
+      const stats = {
+        total: applications.length,
+        pending: applications.filter(app => app.status === 'pending').length,
+        under_review: applications.filter(app => app.status === 'under_review').length,
+        shortlisted: applications.filter(app => app.status === 'shortlisted').length,
+        interview_scheduled: applications.filter(app => app.status === 'interview_scheduled').length,
+        interview_confirmed: applications.filter(app => app.status === 'interview_confirmed').length,
+        interview_completed: applications.filter(app => app.status === 'interview_completed').length,
+        hired: applications.filter(app => app.status === 'hired').length,
+        rejected: applications.filter(app => app.status === 'rejected').length
+      };
+      
+      setApplicationStats(stats);
+    } catch (err) {
+      console.error('Error loading application stats:', err);
+    } finally {
+      setLoadingStats(false);
+    }
+  };
 
   const handleDeleteJob = async () => {
     try {
@@ -226,7 +262,7 @@ const JobDetails = () => {
           {/* Job Description */}
           <div className="card-themed-yellow">
             <h2 className="text-lg font-semibold mb-4 heading-gradient">Job Description</h2>
-            <div className="prose max-w-none text-gray-700">
+            <div className="prose max-w-none text-gray-700 break-words overflow-hidden">
               {/* Render markdown with GFM for bold, lists, etc. */}
               {typeof job.description === 'string' && job.description.trim() ? (
                 <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -242,7 +278,7 @@ const JobDetails = () => {
           {job.required_experience && (
             <div className="card-themed-yellow">
               <h2 className="text-lg font-semibold mb-4 heading-gradient">Required Experience</h2>
-              <div className="prose max-w-none">
+              <div className="prose max-w-none break-words overflow-hidden">
                 <div className="whitespace-pre-wrap text-gray-700">
                   {job.required_experience}
                 </div>
@@ -389,11 +425,96 @@ const JobDetails = () => {
             </div>
           </div>
 
+          {/* Application Statistics - for Account Managers, HR, and Admin */}
+          {(user?.user_type === 'account_manager' || user?.user_type === 'hr' || user?.user_type === 'admin') && (
+            <div className="card-themed-yellow">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold heading-gradient">Application Progress</h3>
+                <Link
+                  to={`/applications?job_id=${job.id}`}
+                  className="text-primary-600 hover:text-primary-800 text-sm font-medium flex items-center"
+                >
+                  <EyeIcon className="h-4 w-4 mr-1" />
+                  View All
+                </Link>
+              </div>
+              {loadingStats ? (
+                <div className="text-center py-4">
+                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-primary-600 mx-auto"></div>
+                </div>
+              ) : applicationStats ? (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-600">Total Applications</span>
+                    <span className="font-semibold text-gray-900">{applicationStats.total}</span>
+                  </div>
+                  {applicationStats.pending > 0 && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">Pending</span>
+                      <span className="font-medium text-yellow-600">{applicationStats.pending}</span>
+                    </div>
+                  )}
+                  {applicationStats.under_review > 0 && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">Under Review</span>
+                      <span className="font-medium text-blue-600">{applicationStats.under_review}</span>
+                    </div>
+                  )}
+                  {applicationStats.shortlisted > 0 && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">Shortlisted</span>
+                      <span className="font-medium text-green-600">{applicationStats.shortlisted}</span>
+                    </div>
+                  )}
+                  {applicationStats.interview_scheduled > 0 && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">Interview Scheduled</span>
+                      <span className="font-medium text-purple-600">{applicationStats.interview_scheduled}</span>
+                    </div>
+                  )}
+                  {applicationStats.interview_confirmed > 0 && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">Interview Confirmed</span>
+                      <span className="font-medium text-indigo-600">{applicationStats.interview_confirmed}</span>
+                    </div>
+                  )}
+                  {applicationStats.interview_completed > 0 && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">Interview Completed</span>
+                      <span className="font-medium text-teal-600">{applicationStats.interview_completed}</span>
+                    </div>
+                  )}
+                  {applicationStats.hired > 0 && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">Hired</span>
+                      <span className="font-medium text-green-700">{applicationStats.hired}</span>
+                    </div>
+                  )}
+                  {applicationStats.rejected > 0 && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-600">Rejected</span>
+                      <span className="font-medium text-red-600">{applicationStats.rejected}</span>
+                    </div>
+                  )}
+                  {applicationStats.total === 0 && (
+                    <div className="text-center py-4 text-gray-500 text-sm">
+                      No applications yet
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-center py-4 text-gray-500 text-sm">
+                  Unable to load application stats
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Additional Info */}
          {typeof job.short_description === 'string' && job.short_description.trim() && (
              <div className="card-themed-red">
                <h3 className="text-lg font-semibold mb-3 heading-gradient">Summary</h3>
-               <div className="prose max-w-none text-gray-700 text-sm leading-relaxed">
+               <div className="prose max-w-none text-gray-700 text-sm leading-relaxed break-words overflow-hidden">
                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
                    {job.short_description}
                  </ReactMarkdown>

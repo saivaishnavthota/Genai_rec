@@ -91,6 +91,8 @@ function App() {
               <Route path="/jobs/create" element={<CreateJob />} />
               <Route path="/jobs/:jobId/edit" element={<EditJob />} />
               <Route path="/jobs/:jobId" element={<JobDetails />} />
+              <Route path="/applications" element={<ApplicationList />} />
+              <Route path="/applications/:applicationId" element={<ApplicationDetails />} />
 
               {/* HR Routes */}
               <Route path="/hr-dashboard" element={<HRDashboard />} />

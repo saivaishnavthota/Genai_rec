@@ -37,6 +37,10 @@ class InterviewSchedule(Base):
     status = Column(String(50), default="pending")  # pending, confirmed, completed, cancelled
     notes = Column(Text, nullable=True)
     
+    # Candidate Review Email Scheduling
+    candidate_review_email_scheduled_at = Column(DateTime(timezone=True), nullable=True)  # When to send candidate review email
+    candidate_review_email_sent_at = Column(DateTime(timezone=True), nullable=True)  # When candidate review email was actually sent
+    
     # Timestamps
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

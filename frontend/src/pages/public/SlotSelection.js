@@ -21,17 +21,24 @@ const SlotSelection = () => {
     const loadSlots = async () => {
       try {
         setLoading(true);
+        setError('');
         const data = await interviewService.getAvailableSlots(applicationId);
         setSlots(data.available_slots || []);
       } catch (err) {
+        console.error('Error loading slots:', err);
+
         if (err.response?.status === 400) {
           setError('Interview slot has already been selected for this application.');
         } else if (err.response?.status === 404) {
-          setError('No available slots found. Please ensure you have a valid link or contact HR.');
+          setError('No available slots found. HR needs to generate slots first. Please contact HR or try again later.');
+        } else if (err.code === 'ERR_NETWORK' || err.message === 'Network Error') {
+          setError('Cannot connect to the server. Please check your internet connection or try again later.');
+        } else if (err.response?.status === 500) {
+          setError('Server error occurred. Please contact HR for assistance.');
         } else {
-          setError('Failed to load available slots. Please try again or contact HR.');
+          const errorDetail = err.response?.data?.detail || err.message || 'Unknown error';
+          setError(`Failed to load available slots: ${errorDetail}. Please contact HR for assistance.`);
         }
-        console.error('Error loading slots:', err);
       } finally {
         setLoading(false);
       }
@@ -157,20 +164,27 @@ const SlotSelection = () => {
 
     try {
       setSubmitting(true);
+      setError('');
       await interviewService.selectSlot(applicationId, {
         selected_date: selectedSlot.date,
         selected_time: selectedSlot.time,
       });
       setSuccess(true);
     } catch (err) {
+      console.error('Error selecting slot:', err);
+
       if (err.response?.status === 400) {
         setError('This slot is no longer available or has already been selected.');
       } else if (err.response?.status === 404) {
-        setError('Application not found. Please check your link.');
+        setError('Application not found. Please check your link or contact HR.');
+      } else if (err.code === 'ERR_NETWORK' || err.message === 'Network Error') {
+        setError('Cannot connect to the server. Please check your internet connection and try again.');
+      } else if (err.response?.status === 500) {
+        setError('Server error occurred while selecting slot. Please contact HR for assistance.');
       } else {
-        setError('Failed to select slot. Please try again or contact HR.');
+        const errorDetail = err.response?.data?.detail || err.message || 'Unknown error';
+        setError(`Failed to select slot: ${errorDetail}. Please contact HR for assistance.`);
       }
-      console.error('Error selecting slot:', err);
     } finally {
       setSubmitting(false);
     }

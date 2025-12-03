@@ -14,6 +14,8 @@ const CreateJob = () => {
   const [currentStep, setCurrentStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [similarJobs, setSimilarJobs] = useState([]);
+  const [loadingSimilar, setLoadingSimilar] = useState(false);
 
   // Step 1: Basic Details
   const [basicDetails, setBasicDetails] = useState({
@@ -152,6 +154,71 @@ const CreateJob = () => {
       ...prev,
       [name]: value
     }));
+    
+    // Load similar jobs when department, job_type, or experience_level changes
+    if (['department', 'job_type', 'experience_level'].includes(name) && value) {
+      // Use setTimeout to avoid calling immediately (wait for state update)
+      setTimeout(() => {
+        loadSimilarJobs(name, value);
+      }, 100);
+    }
+  };
+
+  const loadSimilarJobs = async (changedField = null, changedValue = null) => {
+    try {
+      setLoadingSimilar(true);
+      const filters = { ...additionalDetails };
+      if (changedField && changedValue) {
+        filters[changedField] = changedValue;
+      }
+      
+      // Only load if we have at least one filter
+      if (filters.department || filters.job_type || filters.experience_level) {
+        const jobs = await jobService.getJobs({ ...filters, limit: 5 });
+        setSimilarJobs(jobs);
+      } else {
+        setSimilarJobs([]);
+      }
+    } catch (err) {
+      console.error('Error loading similar jobs:', err);
+      setSimilarJobs([]);
+    } finally {
+      setLoadingSimilar(false);
+    }
+  };
+
+  const handleAutofill = (field) => {
+    if (similarJobs.length === 0) return;
+    
+    // Find the most common value from similar jobs
+    const values = similarJobs
+      .map(job => {
+        if (field === 'key_skills') return job.key_skills || [];
+        if (field === 'certifications') return job.certifications || [];
+        if (field === 'additional_requirements') return job.additional_requirements || [];
+        return job[field] || '';
+      })
+      .filter(v => v && (Array.isArray(v) ? v.length > 0 : v.trim() !== ''));
+    
+    if (values.length === 0) return;
+    
+    if (Array.isArray(values[0])) {
+      // For array fields, combine unique values
+      const combined = [...new Set(values.flat())];
+      setAiFields(prev => ({
+        ...prev,
+        [field]: combined
+      }));
+    } else {
+      // For text fields, use the first non-empty value
+      const firstValue = values.find(v => v && v.trim() !== '');
+      if (firstValue) {
+        setAiFields(prev => ({
+          ...prev,
+          [field]: firstValue
+        }));
+      }
+    }
   };
 
   const handleSubmitJob = async () => {
@@ -167,7 +234,11 @@ const CreateJob = () => {
         location: additionalDetails.location || '',
         job_type: additionalDetails.job_type || 'full-time',
         experience_level: additionalDetails.experience_level || '',
-        salary_range: additionalDetails.salary_range || ''
+        salary_range: additionalDetails.salary_range || '',
+        key_skills: aiFields.key_skills || [],
+        required_experience: aiFields.required_experience || '',
+        certifications: aiFields.certifications || [],
+        additional_requirements: aiFields.additional_requirements || []
       };
 
       const response = await jobService.createJob(jobData);
@@ -305,7 +376,7 @@ className="input-field focus:ring-primary-500 focus:border-primary-500 transitio
                 ) : (
                   <SparklesIcon className="h-5 w-5 mr-2" />
                 )}
-                {loading ? 'Generating...' : 'Generate AI Fields'}
+                {loading ? 'Generating...' : 'Generate Draft Fields'}
               </button>
             </div>
           </div>
@@ -319,48 +390,126 @@ className="input-field focus:ring-primary-500 focus:border-primary-500 transitio
 
             {/* Key Skills */}
             <div>
-              <label className="block text-sm font-medium text-gray-800 mb-2">
-                Key Skills
-              </label>
-              {aiFields.key_skills.map((skill, index) => (
-                <div key={index} className="flex items-center mb-2">
-                  <input
-                    type="text"
-className="input-field focus:ring-primary-500 focus:border-primary-500 transition-shadow mr-2"
-                    value={skill}
-                    onChange={(e) => handleArrayFieldChange('key_skills', index, e.target.value)}
-                    placeholder="Enter skill"
-                  />
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-gray-800">
+                  Key Skills (comma-separated)
+                </label>
+                {similarJobs.length > 0 && (
                   <button
-                    onClick={() => removeArrayItem('key_skills', index)}
-                    className="text-red-600 hover:text-red-800 p-2 rounded-md hover:bg-red-50"
-                    title="Remove"
-                    aria-label="Remove"
+                    type="button"
+                    onClick={() => handleAutofill('key_skills')}
+                    className="text-xs text-primary-600 hover:text-primary-800 font-medium"
+                    title="Autofill from similar jobs"
                   >
-                    <XMarkIcon className="h-5 w-5" />
+                    🔄 Autofill
                   </button>
+                )}
+              </div>
+              <input
+                type="text"
+                value={Array.isArray(aiFields.key_skills) ? aiFields.key_skills.join(', ') : ''}
+                onChange={(e) => {
+                  const skills = e.target.value.split(',').map(skill => skill.trim()).filter(skill => skill);
+                  handleAiFieldsChange('key_skills', skills);
+                }}
+                className="input-field focus:ring-primary-500 focus:border-primary-500 transition-shadow mb-2"
+                placeholder="React, Node.js, JavaScript, Python, AWS"
+              />
+              {aiFields.key_skills && aiFields.key_skills.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1">
+                  {aiFields.key_skills.map((skill, index) => (
+                    <span
+                      key={index}
+                      className="inline-block bg-primary-100 text-primary-800 text-xs px-2 py-1 rounded ring-1 ring-inset ring-primary-200"
+                    >
+                      {skill}
+                    </span>
+                  ))}
                 </div>
-              ))}
-              <button
-                onClick={() => addArrayItem('key_skills')}
-                className="btn-outline flex items-center text-sm hover:bg-primary-500 hover:text-primary-700 ring-1 ring-inset ring-primary-200 rounded-md"
-              >
-                <PlusIcon className="h-4 w-4 mr-1" />
-                Add Skill
-              </button>
+              )}
             </div>
 
             {/* Required Experience */}
             <div>
-              <label className="block text-sm font-medium text-gray-800 mb-2">
-                Required Experience
-              </label>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-gray-800">
+                  Required Experience
+                </label>
+                {similarJobs.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleAutofill('required_experience')}
+                    className="text-xs text-primary-600 hover:text-primary-800 font-medium"
+                    title="Autofill from similar jobs"
+                  >
+                    🔄 Autofill
+                  </button>
+                )}
+              </div>
               <textarea
 className="input-field focus:ring-primary-500 focus:border-primary-500 transition-shadow"
                 rows={3}
                 value={aiFields.required_experience}
                 onChange={(e) => handleAiFieldsChange('required_experience', e.target.value)}
                 placeholder="Describe the required experience..."
+              />
+            </div>
+
+            {/* Certifications */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-gray-800">
+                  Certifications (comma-separated)
+                </label>
+                {similarJobs.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleAutofill('certifications')}
+                    className="text-xs text-primary-600 hover:text-primary-800 font-medium"
+                    title="Autofill from similar jobs"
+                  >
+                    🔄 Autofill
+                  </button>
+                )}
+              </div>
+              <input
+                type="text"
+                value={Array.isArray(aiFields.certifications) ? aiFields.certifications.join(', ') : ''}
+                onChange={(e) => {
+                  const items = e.target.value.split(',').map(item => item.trim()).filter(item => item);
+                  handleAiFieldsChange('certifications', items);
+                }}
+                className="input-field focus:ring-primary-500 focus:border-primary-500 transition-shadow"
+                placeholder="AWS Certified Developer, PMP, etc."
+              />
+            </div>
+
+            {/* Additional Requirements */}
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-sm font-medium text-gray-800">
+                  Additional Requirements (comma-separated)
+                </label>
+                {similarJobs.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => handleAutofill('additional_requirements')}
+                    className="text-xs text-primary-600 hover:text-primary-800 font-medium"
+                    title="Autofill from similar jobs"
+                  >
+                    🔄 Autofill
+                  </button>
+                )}
+              </div>
+              <input
+                type="text"
+                value={Array.isArray(aiFields.additional_requirements) ? aiFields.additional_requirements.join(', ') : ''}
+                onChange={(e) => {
+                  const items = e.target.value.split(',').map(item => item.trim()).filter(item => item);
+                  handleAiFieldsChange('additional_requirements', items);
+                }}
+                className="input-field focus:ring-primary-500 focus:border-primary-500 transition-shadow"
+                placeholder="On-call availability, travel, specific tooling, etc."
               />
             </div>
 

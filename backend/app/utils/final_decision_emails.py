@@ -6,10 +6,22 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-def send_candidate_hired_email(candidate_email: str, candidate_name: str, job_title: str, company_name: str = "Our Company"):
+def send_candidate_hired_email(candidate_email: str, candidate_name: str, job_title: str, company_name: str = "Our Company", tentative_joining_date = None):
     """Send congratulations email to hired candidate"""
     
     subject = f"🎉 Congratulations! You've been selected for {job_title}"
+    
+    # Format joining date for text
+    joining_date_text = ""
+    if tentative_joining_date:
+        from datetime import datetime
+        if isinstance(tentative_joining_date, str):
+            try:
+                tentative_joining_date = datetime.fromisoformat(tentative_joining_date.replace('Z', '+00:00'))
+            except:
+                pass
+        if hasattr(tentative_joining_date, 'strftime'):
+            joining_date_text = f"• Tentative Joining Date: {tentative_joining_date.strftime('%B %d, %Y')}\n"
     
     # Plain text version
     text_body = f"""
@@ -23,6 +35,7 @@ NEXT STEPS:
 • Our HR team will contact you within 2-3 business days with your offer letter
 • The offer letter will include details about salary, benefits, start date, and other terms
 • Please keep this information confidential until the formal offer is extended
+{joining_date_text}
 
 We are excited about the possibility of you joining our team and contributing to our continued success.
 
@@ -37,7 +50,19 @@ Best regards,
 This is an automated message from the {company_name} hiring system.
 """
 
-    # HTML version
+    # HTML version - build joining date HTML separately
+    joining_date_html = ""
+    if tentative_joining_date:
+        from datetime import datetime
+        if isinstance(tentative_joining_date, str):
+            # Parse if it's a string
+            try:
+                tentative_joining_date = datetime.fromisoformat(tentative_joining_date.replace('Z', '+00:00'))
+            except:
+                pass
+        if hasattr(tentative_joining_date, 'strftime'):
+            joining_date_html = f'<li style="margin-bottom: 8px;"><strong>Tentative Joining Date:</strong> {tentative_joining_date.strftime("%B %d, %Y")}</li>'
+    
     html_body = f"""
 <!DOCTYPE html>
 <html>
@@ -70,6 +95,7 @@ This is an automated message from the {company_name} hiring system.
                 <li style="margin-bottom: 8px;">Our HR team will contact you within <strong>2-3 business days</strong> with your offer letter</li>
                 <li style="margin-bottom: 8px;">The offer letter will include details about <strong>salary, benefits, start date</strong>, and other terms</li>
                 <li style="margin-bottom: 8px;">Please keep this information <strong>confidential</strong> until the formal offer is extended</li>
+                {joining_date_html}
             </ul>
         </div>
         
@@ -110,7 +136,7 @@ This is an automated message from the {company_name} hiring system.
         logger.error(f"Failed to send hired email to {candidate_email}: {e}")
         return False
 
-def send_candidate_rejected_email(candidate_email: str, candidate_name: str, job_title: str, company_name: str = "Our Company"):
+def send_candidate_rejected_email(candidate_email: str, candidate_name: str, job_title: str, company_name: str = "Our Company", rejection_reason: str = None):
     """Send rejection email to candidate"""
     
     subject = f"Update on your application for {job_title}"
@@ -122,6 +148,8 @@ Dear {candidate_name},
 Thank you for your interest in the {job_title} position at {company_name} and for taking the time to participate in our interview process.
 
 After careful consideration and evaluation of all candidates, we have decided to move forward with another candidate whose experience more closely aligns with our current needs.
+
+{f"REASON: {rejection_reason}" if rejection_reason else ""}
 
 This decision was not easy, as we were impressed by your qualifications and the professionalism you demonstrated throughout the process. We encourage you to apply for future opportunities that match your skills and interests.
 
@@ -160,6 +188,7 @@ This is an automated message from the {company_name} hiring system.
             <p style="margin: 0; font-size: 16px;">
                 After careful consideration and evaluation of all candidates, we have decided to move forward with another candidate whose experience more closely aligns with our current needs.
             </p>
+            {f'<div style="background: #fff3cd; padding: 15px; border-radius: 6px; margin-top: 15px; border-left: 3px solid #ffc107;"><p style="margin: 0; font-size: 14px;"><strong>Reason:</strong> {rejection_reason}</p></div>' if rejection_reason else ''}
         </div>
         
         <p>This decision was not easy, as we were impressed by your qualifications and the professionalism you demonstrated throughout the process. We encourage you to apply for future opportunities that match your skills and interests.</p>

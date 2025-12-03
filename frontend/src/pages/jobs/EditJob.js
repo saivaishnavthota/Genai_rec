@@ -36,11 +36,21 @@ const EditJob = () => {
     status: 'draft'
   });
 
+  const [isPublished, setIsPublished] = useState(false);
+  const [similarJobs, setSimilarJobs] = useState([]);
+  const [loadingSimilar, setLoadingSimilar] = useState(false);
+
   const loadJob = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
       const job = await jobService.getJob(id);
+      
+      // Check if job is published
+      if (job.status === 'published') {
+        setIsPublished(true);
+        setError('This job is published and cannot be edited. Please unpublish it first or create a new job posting.');
+      }
       
       // Check permissions
       if (user?.user_type !== 'admin' && 
@@ -65,6 +75,11 @@ const EditJob = () => {
         additional_requirements: job.additional_requirements || [],
         status: job.status || 'draft'
       });
+
+      // Load similar jobs for autofill
+      if (job.status !== 'published') {
+        loadSimilarJobs();
+      }
     } catch (err) {
       setError('Failed to load job details');
       console.error('Error loading job:', err);
@@ -72,6 +87,52 @@ const EditJob = () => {
       setLoading(false);
     }
   }, [id, user?.user_type, user?.id]);
+
+  const loadSimilarJobs = async () => {
+    try {
+      setLoadingSimilar(true);
+      const jobs = await jobService.getSimilarJobs(id);
+      setSimilarJobs(jobs);
+    } catch (err) {
+      console.error('Error loading similar jobs:', err);
+    } finally {
+      setLoadingSimilar(false);
+    }
+  };
+
+  const handleAutofill = (field) => {
+    if (similarJobs.length === 0) return;
+    
+    // Find the most common value from similar jobs
+    const values = similarJobs
+      .map(job => {
+        if (field === 'key_skills') return job.key_skills || [];
+        if (field === 'certifications') return job.certifications || [];
+        if (field === 'additional_requirements') return job.additional_requirements || [];
+        return job[field] || '';
+      })
+      .filter(v => v && (Array.isArray(v) ? v.length > 0 : v.trim() !== ''));
+    
+    if (values.length === 0) return;
+    
+    if (Array.isArray(values[0])) {
+      // For array fields, combine unique values
+      const combined = [...new Set(values.flat())];
+      setFormData(prev => ({
+        ...prev,
+        [field]: combined
+      }));
+    } else {
+      // For text fields, use the first non-empty value
+      const firstValue = values.find(v => v && v.trim() !== '');
+      if (firstValue) {
+        setFormData(prev => ({
+          ...prev,
+          [field]: firstValue
+        }));
+      }
+    }
+  };
 
   useEffect(() => {
     loadJob();
@@ -214,6 +275,12 @@ const EditJob = () => {
         </div>
       )}
 
+      {isPublished && (
+        <div className="bg-yellow-50 border border-yellow-300 text-yellow-800 px-4 py-3 rounded-md">
+          <strong>⚠️ Published Job:</strong> This job is published and cannot be edited. Please unpublish it first or create a new job posting.
+        </div>
+      )}
+
       {/* Edit Form */}
       <form onSubmit={handleSubmit} className="space-y-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -232,9 +299,10 @@ const EditJob = () => {
                     name="title"
                     value={formData.title}
                     onChange={handleInputChange}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                     placeholder="e.g. Senior Software Engineer"
                     required
+                    disabled={isPublished}
                   />
                 </div>
 
@@ -247,8 +315,9 @@ const EditJob = () => {
                     value={formData.short_description}
                     onChange={handleInputChange}
                     rows={2}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                     placeholder="Brief summary of the role..."
+                    disabled={isPublished}
                   />
                 </div>
 
@@ -261,35 +330,62 @@ const EditJob = () => {
                     value={formData.description}
                     onChange={handleInputChange}
                     rows={6}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                     placeholder="Detailed job description..."
+                    disabled={isPublished}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Required Experience
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-sm font-medium text-gray-700">
+                      Required Experience
+                    </label>
+                    {similarJobs.length > 0 && !isPublished && (
+                      <button
+                        type="button"
+                        onClick={() => handleAutofill('required_experience')}
+                        className="text-xs text-primary-600 hover:text-primary-800 font-medium"
+                        title="Autofill from similar jobs"
+                      >
+                        🔄 Autofill
+                      </button>
+                    )}
+                  </div>
                   <textarea
                     name="required_experience"
                     value={formData.required_experience}
                     onChange={handleInputChange}
                     rows={4}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                     placeholder="Describe the required experience (years, areas, levels)..."
+                    disabled={isPublished}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Key Skills (comma-separated)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-sm font-medium text-gray-700">
+                      Key Skills (comma-separated)
+                    </label>
+                    {similarJobs.length > 0 && !isPublished && (
+                      <button
+                        type="button"
+                        onClick={() => handleAutofill('key_skills')}
+                        className="text-xs text-primary-600 hover:text-primary-800 font-medium"
+                        title="Autofill from similar jobs"
+                      >
+                        🔄 Autofill
+                      </button>
+                    )}
+                  </div>
                   <input
                     type="text"
                     value={formData.key_skills.join(', ')}
                     onChange={(e) => handleSkillsChange(e.target.value)}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                     placeholder="React, Node.js, JavaScript, Python, AWS"
+                    disabled={isPublished}
                   />
                   {formData.key_skills.length > 0 && (
                     <div className="mt-2 flex flex-wrap gap-1">
@@ -306,28 +402,54 @@ const EditJob = () => {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Certifications (comma-separated)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-sm font-medium text-gray-700">
+                      Certifications (comma-separated)
+                    </label>
+                    {similarJobs.length > 0 && !isPublished && (
+                      <button
+                        type="button"
+                        onClick={() => handleAutofill('certifications')}
+                        className="text-xs text-primary-600 hover:text-primary-800 font-medium"
+                        title="Autofill from similar jobs"
+                      >
+                        🔄 Autofill
+                      </button>
+                    )}
+                  </div>
                   <input
                     type="text"
                     value={formData.certifications.join(', ')}
                     onChange={(e) => handleListChange('certifications', e.target.value)}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                     placeholder="AWS Certified Developer, PMP, etc."
+                    disabled={isPublished}
                   />
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Additional Requirements (comma-separated)
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-sm font-medium text-gray-700">
+                      Additional Requirements (comma-separated)
+                    </label>
+                    {similarJobs.length > 0 && !isPublished && (
+                      <button
+                        type="button"
+                        onClick={() => handleAutofill('additional_requirements')}
+                        className="text-xs text-primary-600 hover:text-primary-800 font-medium"
+                        title="Autofill from similar jobs"
+                      >
+                        🔄 Autofill
+                      </button>
+                    )}
+                  </div>
                   <input
                     type="text"
                     value={formData.additional_requirements.join(', ')}
                     onChange={(e) => handleListChange('additional_requirements', e.target.value)}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                     placeholder="On-call availability, travel, specific tooling, etc."
+                    disabled={isPublished}
                   />
                 </div>
               </div>
@@ -349,8 +471,9 @@ const EditJob = () => {
                     name="department"
                     value={formData.department}
                     onChange={handleInputChange}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                     placeholder="Engineering"
+                    disabled={isPublished}
                   />
                 </div>
 
@@ -363,8 +486,9 @@ const EditJob = () => {
                     name="location"
                     value={formData.location}
                     onChange={handleInputChange}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                     placeholder="San Francisco, CA"
+                    disabled={isPublished}
                   />
                 </div>
 
@@ -376,7 +500,8 @@ const EditJob = () => {
                     name="job_type"
                     value={formData.job_type}
                     onChange={handleInputChange}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                    disabled={isPublished}
                   >
                     <option value="">Select job type</option>
                     <option value="full-time">Full-time</option>
@@ -395,7 +520,8 @@ const EditJob = () => {
                     name="experience_level"
                     value={formData.experience_level}
                     onChange={handleInputChange}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                    disabled={isPublished}
                   >
                     <option value="">Select experience level</option>
                     <option value="entry">Entry Level</option>
@@ -416,8 +542,9 @@ const EditJob = () => {
                     name="salary_range"
                     value={formData.salary_range}
                     onChange={handleInputChange}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
                     placeholder="e.g., ₹12–15 LPA or 50000-80000"
+                    disabled={isPublished}
                   />
                 </div>
 
@@ -431,7 +558,8 @@ const EditJob = () => {
                     name="status"
                     value={formData.status}
                     onChange={handleInputChange}
-                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500"
+                    className="w-full border border-gray-300 rounded-md px-3 py-2 focus:outline-none focus:ring-2 focus:ring-primary-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+                    disabled={isPublished}
                   >
                     <option value="draft">Draft</option>
                     <option value="pending_approval">Pending Approval</option>
@@ -451,8 +579,8 @@ const EditJob = () => {
               <div className="space-y-4">
                 <button
                   type="submit"
-                  disabled={saving}
-                  className="w-full btn-primary flex items-center justify-center"
+                  disabled={saving || isPublished}
+                  className="w-full btn-primary flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {saving ? (
                     <>
@@ -462,7 +590,7 @@ const EditJob = () => {
                   ) : (
                     <>
                       <SparklesIcon className="h-4 w-4 mr-2" />
-                      Update Job
+                      {isPublished ? 'Cannot Update Published Job' : 'Update Job'}
                     </>
                   )}
                 </button>

@@ -86,7 +86,7 @@ services:
       - SMTP_USERNAME=${SMTP_USERNAME:-alphanxzen@gmail.com}
       - SMTP_PASSWORD=${SMTP_PASSWORD:-rewncxqueiuzfgmd}
       - EMAIL_FROM=${EMAIL_FROM:-alphanxzen@gmail.com}
-      - FRONTEND_URL=${FRONTEND_URL:-https://149.102.158.71:8443}
+      - FRONTEND_URL=${FRONTEND_URL:-http://149.102.158.71:3132}
       - USE_OLLAMA=true
       # For Docker Ollama service: use ollama service name
       - OLLAMA_BASE_URL=http://ollama:11434

@@ -23,16 +23,22 @@ class InterviewService:
     def __init__(self):
         self.shortlist_threshold = settings.shortlist_threshold
     
-    def generate_interview_slots(self, start_date: date, weeks: int = 2) -> List[dict]:
+    def generate_interview_slots(self, start_date: date, end_date: date = None, weeks: int = 2) -> List[dict]:
         """
         Generate available slots Mon-Fri, 12 PM - 6 PM
-        Starting 1 week after selection email
+        If end_date is provided, use it; otherwise start 1 week after start_date and add weeks
         """
         slots = []
-        current_date = start_date + timedelta(days=7)  # Start 1 week later
-        end_date = current_date + timedelta(weeks=weeks)
+        if end_date:
+            # Use provided date range
+            current_date = start_date
+            slot_end_date = end_date
+        else:
+            # Default behavior: Start 1 week later
+            current_date = start_date + timedelta(days=7)
+            slot_end_date = current_date + timedelta(weeks=weeks)
         
-        while current_date < end_date:
+        while current_date <= slot_end_date:
             # Only Monday to Friday (0-4)
             if current_date.weekday() < 5:
                 # 12 PM to 6 PM (6 slots per day)
@@ -101,9 +107,10 @@ class InterviewService:
             db.rollback()
             return False
     
-    async def fetch_availability_slots(self, db: Session, application_id: int) -> dict:
+    async def fetch_availability_slots(self, db: Session, application_id: int, from_date: Optional[date] = None, to_date: Optional[date] = None) -> dict:
         """
         HR clicks 'Fetch Availability' - generate slots and send to candidate
+        If from_date and to_date are provided, use them; otherwise use default behavior
         """
         try:
             application = db.query(Application).filter(Application.id == application_id).first()
@@ -125,14 +132,23 @@ class InterviewService:
                 db.flush()  # Get the ID
             
             # Generate available slots
-            today = date.today()
-            available_slots = self.generate_interview_slots(today)
+            if from_date and to_date:
+                # Use provided date range
+                available_slots = self.generate_interview_slots(from_date, to_date)
+                slots_generated_from = from_date
+                slots_generated_to = to_date
+            else:
+                # Default behavior: Start 1 week from today
+                today = date.today()
+                available_slots = self.generate_interview_slots(today)
+                slots_generated_from = today + timedelta(days=7)
+                slots_generated_to = today + timedelta(days=21)
             
             # Update interview schedule
             interview_schedule.availability_requested_at = datetime.utcnow()
             interview_schedule.available_slots = available_slots
-            interview_schedule.slots_generated_from = today + timedelta(days=7)
-            interview_schedule.slots_generated_to = today + timedelta(days=21)
+            interview_schedule.slots_generated_from = slots_generated_from
+            interview_schedule.slots_generated_to = slots_generated_to
             
             # Send availability request email to candidate
             try:
@@ -141,7 +157,9 @@ class InterviewService:
                     application.full_name,
                     application.job.title,
                     available_slots,
-                    application_id  # Used as token for slot selection
+                    application_id,  # Used as token for slot selection
+                    slots_generated_from,
+                    slots_generated_to
                 )
             except Exception as e:
                 logger.warning(f"Email sending failed but continuing: {e}")
@@ -233,6 +251,25 @@ class InterviewService:
             interview_schedule.backup_interviewer_email = interviewer_data.get("backup_interviewer_email")
             interview_schedule.interview_scheduled_at = datetime.utcnow()
             interview_schedule.status = "confirmed"
+
+            # Auto-schedule candidate review email 1 hour after interview end if not already scheduled/sent
+            if (
+                not interview_schedule.candidate_review_email_scheduled_at
+                and not interview_schedule.candidate_review_email_sent_at
+                and interview_schedule.selected_slot_date
+                and interview_schedule.selected_slot_time
+            ):
+                interview_start = datetime.combine(
+                    interview_schedule.selected_slot_date,
+                    interview_schedule.selected_slot_time
+                )
+                interview_end = interview_start + timedelta(minutes=interview_schedule.interview_duration)
+                interview_schedule.candidate_review_email_scheduled_at = interview_end + timedelta(hours=1)
+                logger.info(
+                    "Auto-scheduled candidate review email for application %s at %s",
+                    application_id,
+                    interview_schedule.candidate_review_email_scheduled_at
+                )
             
             # Create Google Calendar/Meet integration
             google_meet_result = None
@@ -373,7 +410,8 @@ class InterviewService:
     
     async def mark_interview_completed(self, db: Session, application_id: int) -> dict:
         """
-        HR marks interview as completed and automatically sends review tokens
+        HR marks interview as completed and automatically sends review tokens to interviewers.
+        Also schedules candidate review email to be sent after the interview slot ends.
         """
         try:
             application = db.query(Application).filter(Application.id == application_id).first()
@@ -384,8 +422,27 @@ class InterviewService:
                 InterviewSchedule.application_id == application_id
             ).first()
             
-            if interview_schedule:
-                interview_schedule.status = "completed"
+            if not interview_schedule:
+                raise ValueError(f"Interview schedule not found for application {application_id}")
+            
+            interview_schedule.status = "completed"
+            
+            # Calculate when interview ends and schedule candidate review email
+            if interview_schedule.selected_slot_date and interview_schedule.selected_slot_time:
+                # Combine date and time
+                interview_datetime = datetime.combine(
+                    interview_schedule.selected_slot_date,
+                    interview_schedule.selected_slot_time
+                )
+                
+                # Add interview duration to get end time
+                interview_end_time = interview_datetime + timedelta(minutes=interview_schedule.interview_duration)
+                
+                # Schedule candidate review email to be sent after interview ends
+                # Only schedule if not already scheduled or sent
+                if not interview_schedule.candidate_review_email_scheduled_at and not interview_schedule.candidate_review_email_sent_at:
+                    interview_schedule.candidate_review_email_scheduled_at = interview_end_time
+                    logger.info(f"Scheduled candidate review email for application {application_id} to be sent at {interview_end_time}")
             
             # Update application status
             application.status = "interview_completed"
@@ -396,10 +453,29 @@ class InterviewService:
             logger.info(f"Automatically sending review tokens for completed interview (application {application_id})")
             review_result = await self.send_review_tokens_after_interview(db, application_id, skip_time_check=True)
             
+            # Check if interview has already ended - if so, send candidate review email immediately
+            if interview_schedule.candidate_review_email_scheduled_at:
+                interview_end_time = interview_schedule.candidate_review_email_scheduled_at
+                if datetime.utcnow() >= interview_end_time:
+                    # Interview has already ended, send email immediately
+                    logger.info(f"Interview has already ended, sending candidate review email immediately for application {application_id}")
+                    candidate_email_result = await self.send_candidate_review_email(db, application_id)
+                    if candidate_email_result.get("success"):
+                        logger.info(f"Candidate review email sent immediately for application {application_id}")
+                    else:
+                        logger.warning(f"Failed to send candidate review email immediately: {candidate_email_result.get('message')}")
+            
             if review_result["success"]:
+                candidate_email_status = ""
+                if interview_schedule.candidate_review_email_scheduled_at:
+                    if interview_schedule.candidate_review_email_sent_at:
+                        candidate_email_status = " Candidate review email sent."
+                    else:
+                        candidate_email_status = f" Candidate review email scheduled to be sent after interview ends."
+                
                 return {
                     "success": True,
-                    "message": f"Interview marked as completed and review tokens sent successfully! {review_result['tokens_created']} tokens created, {review_result['emails_sent']} emails sent.",
+                    "message": f"Interview marked as completed and review tokens sent successfully! {review_result['tokens_created']} tokens created, {review_result['emails_sent']} emails sent.{candidate_email_status}",
                     "review_tokens": review_result
                 }
             else:
@@ -691,4 +767,191 @@ GenAI Hiring Team
             
         except Exception as e:
             logger.error(f"Error sending review token email: {e}")
+            return False
+    
+    async def send_candidate_review_email(self, db: Session, application_id: int) -> dict:
+        """Send review form email to candidate after interview completion"""
+        try:
+            # Get interview schedule
+            interview_schedule = db.query(InterviewSchedule).filter(
+                InterviewSchedule.application_id == application_id
+            ).first()
+            
+            if not interview_schedule:
+                return {"success": False, "message": "Interview schedule not found"}
+            
+            # Check if email was already sent
+            if interview_schedule.candidate_review_email_sent_at:
+                logger.info(f"Candidate review email already sent for application {application_id}")
+                return {"success": True, "message": "Candidate review email already sent"}
+            
+            # Get application details
+            application = db.query(Application).filter(Application.id == application_id).first()
+            if not application:
+                return {"success": False, "message": "Application not found"}
+            
+            # Check if token already exists for candidate
+            existing_token = db.query(InterviewerToken).filter(
+                InterviewerToken.application_id == application_id,
+                InterviewerToken.interviewer_email == application.email,
+                InterviewerToken.interviewer_type == "candidate"
+            ).first()
+            
+            # Create token if it doesn't exist (7 days expiration for candidates)
+            if not existing_token:
+                candidate_token = InterviewerToken.create_token(
+                    interviewer_email=application.email,
+                    interviewer_name=application.full_name,
+                    application_id=application_id,
+                    interviewer_type="candidate",
+                    expiration_hours=168  # 7 days
+                )
+                db.add(candidate_token)
+                db.flush()  # Get the token ID
+                token = candidate_token.token
+            else:
+                # Use existing token if still valid
+                if existing_token.is_valid():
+                    token = existing_token.token
+                else:
+                    # Create new token if old one expired (7 days expiration for candidates)
+                    candidate_token = InterviewerToken.create_token(
+                        interviewer_email=application.email,
+                        interviewer_name=application.full_name,
+                        application_id=application_id,
+                        interviewer_type="candidate",
+                        expiration_hours=168  # 7 days
+                    )
+                    db.add(candidate_token)
+                    db.flush()
+                    token = candidate_token.token
+            
+            db.commit()
+            
+            # Send email to candidate
+            email_success = await self._send_candidate_review_email(
+                application.email,
+                application.full_name,
+                application.job.title,
+                token
+            )
+            
+            if email_success:
+                # Mark email as sent
+                interview_schedule.candidate_review_email_sent_at = datetime.utcnow()
+                db.commit()
+                logger.info(f"Candidate review email sent successfully for application {application_id}")
+                return {"success": True, "message": "Candidate review email sent successfully"}
+            else:
+                logger.warning(f"Failed to send candidate review email for application {application_id}")
+                return {"success": False, "message": "Failed to send candidate review email"}
+            
+        except Exception as e:
+            logger.error(f"Error sending candidate review email for application {application_id}: {e}")
+            db.rollback()
+            return {"success": False, "message": str(e)}
+    
+    async def _send_candidate_review_email(
+        self,
+        candidate_email: str,
+        candidate_name: str,
+        job_title: str,
+        token: str
+    ) -> bool:
+        """Send review form email to candidate"""
+        try:
+            from ..utils.email import send_email
+            from ..config import settings
+            
+            review_url = f"{settings.frontend_url}/interviewer-review/{token}"
+            
+            subject = f"Interview Feedback Request - {job_title}"
+            
+            body = f"""
+Dear {candidate_name},
+
+Thank you for taking the time to interview with us for the {job_title} position. We hope you had a positive experience during the interview process.
+
+📝 SHARE YOUR FEEDBACK
+======================
+
+We value your feedback and would like to hear about your interview experience. Your insights help us improve our hiring process.
+
+REVIEW LINK: {review_url}
+⏰ This link is valid for 7 days
+🔒 This is a secure link - no login required
+
+HOW TO ACCESS:
+1. Click the review link above (or copy and paste it into your browser)
+2. Complete the feedback form with your experience
+3. Submit your feedback - it only takes a few minutes
+
+FEEDBACK TOPICS:
+- Overall interview experience
+- Communication and clarity
+- Interview process
+- Any suggestions for improvement
+
+Your feedback is confidential and will help us enhance our hiring process for future candidates.
+
+If you have any questions or technical issues, please contact HR.
+
+Best regards,
+GenAI Hiring Team
+            """
+            
+            html_body = f"""
+            <html>
+                <body>
+                    <h2 style="color: #2563eb;">Interview Feedback Request</h2>
+                    <p>Dear {candidate_name},</p>
+                    <p>Thank you for taking the time to interview with us for the <strong>{job_title}</strong> position. We hope you had a positive experience during the interview process.</p>
+                    
+                    <div style="background-color: #dcfce7; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #16a34a;">
+                        <h3 style="color: #16a34a; margin: 0 0 15px 0;">📝 Share Your Feedback</h3>
+                        <p style="margin: 0 0 10px 0;">We value your feedback and would like to hear about your interview experience. Your insights help us improve our hiring process.</p>
+                    </div>
+                    
+                    <div style="background-color: #f0f9ff; padding: 25px; border-radius: 8px; margin: 25px 0; text-align: center; border: 2px solid #2563eb;">
+                        <h3 style="color: #2563eb; margin: 0 0 15px 0;">Submit Your Feedback</h3>
+                        <p style="margin: 0 0 20px 0; font-size: 14px; color: #374151;">Click the button below to access your feedback form:</p>
+                        <a href="{review_url}" style="background-color: #2563eb; color: white; padding: 15px 30px; text-decoration: none; border-radius: 6px; display: inline-block; font-weight: bold; font-size: 16px;">📝 Submit Feedback</a>
+                        <p style="margin: 15px 0 0 0; font-size: 12px; color: #6b7280;">⏰ Valid for 7 days only | 🔒 Secure link - no login required</p>
+                    </div>
+                    
+                    <div style="background-color: #fef3c7; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                        <h3 style="margin: 0 0 15px 0;">📋 How to Access:</h3>
+                        <ol style="margin: 0; padding-left: 20px;">
+                            <li>Click the "Submit Feedback" button above</li>
+                            <li>Complete the feedback form with your experience</li>
+                            <li>Submit your feedback - it only takes a few minutes</li>
+                        </ol>
+                    </div>
+                    
+                    <div style="background-color: #f3f4f6; padding: 20px; border-radius: 8px; margin: 20px 0;">
+                        <h3>Feedback Topics:</h3>
+                        <ul>
+                            <li>Overall interview experience</li>
+                            <li>Communication and clarity</li>
+                            <li>Interview process</li>
+                            <li>Any suggestions for improvement</li>
+                        </ul>
+                    </div>
+                    
+                    <div style="background-color: #dcfce7; padding: 15px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #16a34a;">
+                        <p style="margin: 0; color: #166534;">Your feedback is confidential and will help us enhance our hiring process for future candidates.</p>
+                    </div>
+                    
+                    <p>If you have any questions or technical issues, please contact HR.</p>
+                    
+                    <br>
+                    <p>Best regards,<br><strong>GenAI Hiring Team</strong></p>
+                </body>
+            </html>
+            """
+            
+            return send_email([candidate_email], subject, body, html_body)
+            
+        except Exception as e:
+            logger.error(f"Error sending candidate review email: {e}")
             return False

@@ -120,6 +120,9 @@ async def get_jobs(
     limit: int = Query(100, ge=1, le=1000),
     status_filter: Optional[str] = Query(None),
     created_by_me: bool = Query(False),
+    department: Optional[str] = Query(None),
+    job_type: Optional[str] = Query(None),
+    experience_level: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -137,6 +140,18 @@ async def get_jobs(
     # Filter by status
     if status_filter:
         query = query.filter(Job.status == status_filter)
+    
+    # Filter by department
+    if department:
+        query = query.filter(Job.department.ilike(f"%{department}%"))
+    
+    # Filter by job_type
+    if job_type:
+        query = query.filter(Job.job_type == job_type)
+    
+    # Filter by experience_level
+    if experience_level:
+        query = query.filter(Job.experience_level == experience_level)
     
     # Role-based filtering
     if current_user.user_type == "account_manager":
@@ -216,6 +231,71 @@ async def get_public_job(job_id: int, db: Session = Depends(get_db)):
     
     return JobResponse.from_orm(job)
 
+@router.get("/similar/{job_id}", response_model=List[JobResponse])
+async def get_similar_jobs(
+    job_id: int,
+    limit: int = Query(5, ge=1, le=10),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get similar jobs for autofill suggestions"""
+    job = db.query(Job).filter(Job.id == job_id).first()
+    if not job:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Job not found"
+        )
+    
+    # Check permissions
+    if current_user.user_type != "admin" and job.company_id != current_user.company_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Access denied"
+        )
+    
+    # Find similar jobs based on department, job_type, or experience_level
+    query = db.query(Job).filter(
+        Job.id != job_id,
+        Job.company_id == job.company_id
+    )
+    
+    # Prioritize jobs with similar department, job_type, or experience_level
+    similar_jobs = []
+    
+    # First try to find jobs with same department
+    if job.department:
+        dept_jobs = query.filter(Job.department == job.department).limit(limit).all()
+        similar_jobs.extend(dept_jobs)
+    
+    # Then try same job_type
+    if job.job_type and len(similar_jobs) < limit:
+        existing_ids = [j.id for j in similar_jobs]
+        type_query = query.filter(Job.job_type == job.job_type)
+        if existing_ids:
+            type_query = type_query.filter(~Job.id.in_(existing_ids))
+        type_jobs = type_query.limit(limit - len(similar_jobs)).all()
+        similar_jobs.extend(type_jobs)
+    
+    # Then try same experience_level
+    if job.experience_level and len(similar_jobs) < limit:
+        existing_ids = [j.id for j in similar_jobs]
+        level_query = query.filter(Job.experience_level == job.experience_level)
+        if existing_ids:
+            level_query = level_query.filter(~Job.id.in_(existing_ids))
+        level_jobs = level_query.limit(limit - len(similar_jobs)).all()
+        similar_jobs.extend(level_jobs)
+    
+    # Fill remaining with any other jobs from same company
+    if len(similar_jobs) < limit:
+        existing_ids = [j.id for j in similar_jobs]
+        other_query = query
+        if existing_ids:
+            other_query = other_query.filter(~Job.id.in_(existing_ids))
+        other_jobs = other_query.limit(limit - len(similar_jobs)).all()
+        similar_jobs.extend(other_jobs)
+    
+    return [JobResponse.from_orm(j) for j in similar_jobs[:limit]]
+
 @router.put("/{job_id}", response_model=JobResponse)
 async def update_job(
     job_id: int,
@@ -229,6 +309,13 @@ async def update_job(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Job not found"
+        )
+    
+    # Prevent editing published jobs
+    if job.status == "published":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot edit a published job. Please unpublish it first or create a new job posting."
         )
     
     # Check permissions

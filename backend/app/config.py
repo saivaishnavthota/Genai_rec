@@ -66,7 +66,7 @@ class Settings(BaseSettings):
     max_resume_update_attempts: int = 3
     
     # Frontend URL for generating review links (can be overridden via FRONTEND_URL env var)
-    frontend_url: str = "https://149.102.158.71:8443"
+    frontend_url: str = "http://149.102.158.71:3132"
     
     # Google Calendar/Meet Configuration
     use_service_account: bool = False

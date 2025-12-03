@@ -36,6 +36,15 @@ export const publicUploadApi = axios.create({
     'Content-Type': 'application/json',
   },
 });
+
+// Create separate axios instance for public API endpoints (no auth required)
+export const publicApi = axios.create({
+  baseURL: config.apiUrl,
+  timeout: 10000,
+  headers: {
+    'Content-Type': 'application/json',
+  },
+});
 // Request interceptor to add auth token (for regular API)
 api.interceptors.request.use(
   (config) => {
@@ -125,4 +134,14 @@ publicUploadApi.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+// Response interceptor to handle errors (for Public API - no auth redirect)
+publicApi.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    // Don't redirect to login for public endpoints
+    return Promise.reject(error);
+  }
+);
+
 export default api;

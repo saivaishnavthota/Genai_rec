@@ -57,5 +57,11 @@ export const jobService = {
   async approveJob(id) {
     const response = await api.patch(`/api/jobs/${id}/approve`);
     return response.data;
+  },
+
+  // Get similar jobs for autofill
+  async getSimilarJobs(jobId, limit = 5) {
+    const response = await api.get(`/api/jobs/similar/${jobId}`, { params: { limit } });
+    return response.data;
   }
 };

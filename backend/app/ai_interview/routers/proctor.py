@@ -220,7 +220,11 @@ async def get_application_sessions(
     
     # Get application to check permissions
     from ...models.application import Application
-    application = db.query(Application).filter(Application.id == application_id).first()
+    from sqlalchemy.orm import defer
+    application = db.query(Application).options(
+        defer(Application.rejection_reason),
+        defer(Application.tentative_joining_date)
+    ).filter(Application.id == application_id).first()
     
     if not application:
         raise HTTPException(
@@ -229,12 +233,22 @@ async def get_application_sessions(
         )
     
     # Check permissions
-    if current_user.user_type not in ["hr", "admin"]:
+    if current_user.user_type not in ["hr", "admin", "account_manager"]:
         # Candidate can only see their own applications
         if current_user.user_type == "candidate" and application.user_id != current_user.id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied"
+            )
+    
+    # Account managers can only see sessions for applications of jobs they created
+    if current_user.user_type == "account_manager":
+        from ...models.job import Job
+        job = db.query(Job).filter(Job.id == application.job_id).first()
+        if not job or job.created_by != current_user.id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You can only view sessions for applications of jobs you created"
             )
     
     # Get all sessions for this application

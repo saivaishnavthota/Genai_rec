@@ -1,21 +1,21 @@
-import api, { uploadApi } from './api';
+import api, { uploadApi, publicApi } from './api';
 
 export const interviewService = {
   // Fetch availability slots for candidate (uses longer timeout for email sending)
-  async fetchAvailability(applicationId) {
-    const response = await uploadApi.post(`/api/interviews/fetch-availability/${applicationId}`);
+  async fetchAvailability(applicationId, dateRange = null) {
+    const response = await uploadApi.post(`/api/interviews/fetch-availability/${applicationId}`, dateRange);
     return response.data;
   },
 
-  // Get available slots for an application
+  // Get available slots for an application (public endpoint - no auth required)
   async getAvailableSlots(applicationId) {
-    const response = await api.get(`/api/interviews/available-slots/${applicationId}`);
+    const response = await publicApi.get(`/api/interviews/available-slots/${applicationId}`);
     return response.data;
   },
 
-  // Candidate selects a slot (public endpoint)
+  // Candidate selects a slot (public endpoint - no auth required)
   async selectSlot(applicationId, slotData) {
-    const response = await api.post(`/api/interviews/select-slot/${applicationId}`, slotData);
+    const response = await publicApi.post(`/api/interviews/select-slot/${applicationId}`, slotData);
     return response.data;
   },
 
@@ -62,8 +62,8 @@ export const interviewService = {
   },
 
   // Make final hiring decision
-  async makeFinalDecision(applicationId, decision) {
-    const response = await api.patch(`/api/applications/${applicationId}/final-decision`, { decision });
+  async makeFinalDecision(applicationId, decisionData) {
+    const response = await api.patch(`/api/applications/${applicationId}/final-decision`, decisionData);
     return response.data;
   }
 };
